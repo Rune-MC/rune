@@ -1,0 +1,140 @@
+plugins {
+    kotlin("jvm") version "2.2.0"
+    id("com.gradleup.shadow") version "9.0.0"
+}
+
+group = "app.rune"
+version = "0.1.0"
+
+repositories {
+    mavenCentral()
+    // Paper API + Adventure + brigadier + bungeecord-chat all resolve here.
+    // paperweight-userdev is intentionally not used: the plugin only touches
+    // the public Bukkit/Paper API so remap/reobf is unnecessary.
+    maven("https://repo.papermc.io/repository/maven-public/")
+}
+
+dependencies {
+    compileOnly("io.papermc.paper:paper-api:1.21.4-R0.1-SNAPSHOT")
+
+    // CBOR walker for HostCommand decoding / HostEvent encoding.
+    implementation("co.nstant.in:cbor:0.9")
+
+    // Classpath scanning -- discovers every Bukkit/Paper Event subclass at
+    // startup so we can auto-register a forwarder for each one.
+    implementation("io.github.classgraph:classgraph:4.8.179")
+
+    implementation(kotlin("stdlib"))
+}
+
+// Toolchain is JDK 25, but Kotlin 2.2.0's highest supported bytecode target
+// is JVM 24, so we cap both compilers there. The class files still run fine
+// on JDK 25 (forward-compatible), and FFM API references are resolved at
+// runtime so the bytecode level doesn't gate them.
+java {
+    toolchain.languageVersion.set(JavaLanguageVersion.of(25))
+    sourceCompatibility = JavaVersion.VERSION_24
+    targetCompatibility = JavaVersion.VERSION_24
+}
+
+kotlin {
+    jvmToolchain(25)
+    compilerOptions {
+        jvmTarget.set(org.jetbrains.kotlin.gradle.dsl.JvmTarget.JVM_24)
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Native binary discovery
+//
+// The shadowJar bundles two binaries per platform:
+//   * rune_loader.{dll,so,dylib} -- built by `cargo build --release -p rune-loader`
+//   * libnode.{dll,so,dylib}     -- pre-built; located via $RUNE_NODE_ROOT or
+//                                   tools/libnode-cache/v<ver>/<platform>/out/Release/
+//
+// All paths are resolved from environment + gradle defaults. NO local-machine
+// paths are hardcoded -- contributors set $RUNE_NODE_ROOT (or use
+// `node tools/fetch-libnode.mjs` to populate the cache).
+// ---------------------------------------------------------------------------
+
+/** Detect host OS+arch in the same form used by NativeLibraryExtractor: `<os>-x86_64` etc. */
+fun hostPlatform(): Triple<String, String, String> {
+    val rawOs = System.getProperty("os.name").lowercase()
+    val rawArch = System.getProperty("os.arch").lowercase()
+    val os = when {
+        rawOs.contains("win")              -> "windows"
+        rawOs.contains("mac") ||
+        rawOs.contains("darwin")           -> "macos"
+        rawOs.contains("linux")            -> "linux"
+        else -> throw GradleException("unsupported OS: $rawOs")
+    }
+    val cpu = when (rawArch) {
+        "amd64", "x86_64" -> "x86_64"
+        "aarch64", "arm64" -> "aarch64"
+        else -> throw GradleException("unsupported arch: $rawArch")
+    }
+    val (loaderName, libnodeName) = when (os) {
+        "windows" -> "rune_loader.dll"     to "libnode.dll"
+        "macos"   -> "librune_loader.dylib" to "libnode.dylib"
+        "linux"   -> "librune_loader.so"   to "libnode.so"
+        else -> error("unreachable")
+    }
+    return Triple("$os-$cpu", loaderName, libnodeName)
+}
+
+/** Resolve the libnode root via env + cache search. */
+fun resolveLibnodeRoot(): java.io.File? {
+    System.getenv("RUNE_NODE_ROOT")?.let { return file(it) }
+
+    val version = System.getenv("RUNE_NODE_VERSION") ?: "22.11.0"
+    val (platformDir, _, _) = hostPlatform()
+    // tools/libnode-cache lives at the repo root (parent of `plugin/`).
+    val cache = rootProject.projectDir.parentFile
+        .resolve("tools/libnode-cache/v$version/$platformDir")
+    return if (cache.resolve("src/node.h").exists()) cache else null
+}
+
+tasks {
+    shadowJar {
+        archiveClassifier.set("")
+        archiveFileName.set("rune-${project.version}.jar")
+
+        val (platformDir, loaderName, libnodeName) = hostPlatform()
+        val resourcePath = "native/$platformDir"
+
+        // 1. The cdylib that Panama loads. Built by the rune-loader crate;
+        // path is auto-derived from the workspace's target/release/.
+        val loaderJar = rootProject.projectDir.parentFile
+            .resolve("target/release/$loaderName")
+        from(loaderJar) { into(resourcePath) }
+
+        // 2. libnode -- the JS engine the loader links against. Discovered
+        // via $RUNE_NODE_ROOT or tools/libnode-cache/. Failing to find it
+        // is a hard error because the loader has libnode as a non-optional
+        // import on every platform.
+        val libnodeRoot = resolveLibnodeRoot()
+        if (libnodeRoot != null) {
+            val libnode = libnodeRoot.resolve("out/Release/$libnodeName")
+            if (libnode.exists()) {
+                from(libnode) { into(resourcePath) }
+                logger.lifecycle("shadowJar: bundling $libnodeName from $libnode")
+            } else {
+                logger.warn(
+                    "shadowJar: libnode root resolved to $libnodeRoot but " +
+                        "$libnodeName is missing under out/Release/. " +
+                        "The jar will load only if libnode is present alongside the loader."
+                )
+            }
+        } else {
+            logger.warn(
+                "shadowJar: no libnode found. Set RUNE_NODE_ROOT to a built " +
+                    "Node tree, or run `node tools/fetch-libnode.mjs` from the repo root. " +
+                    "The jar will fail to load at runtime without it."
+            )
+        }
+    }
+
+    build {
+        dependsOn(shadowJar)
+    }
+}

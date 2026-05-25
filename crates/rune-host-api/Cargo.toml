@@ -1,0 +1,12 @@
+[package]
+name = "rune-host-api"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Shared trait and message types for Rune language backends."
+
+[dependencies]
+ciborium.workspace = true
+serde.workspace = true
+serde_bytes.workspace = true
+thiserror.workspace = true

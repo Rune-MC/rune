@@ -1,0 +1,203 @@
+name: build-and-release
+
+# Builds libnode from source on each platform and attaches the
+# stripped-headers tarball to a GitHub Release.
+#
+# Triggers:
+#   * push a tag matching `v*` (e.g. `git tag v22.11.0 && git push --tags`)
+#     -> builds Node at that ref + creates a release tagged the same.
+#   * manual workflow_dispatch with a node_ref input (handy for re-runs).
+#
+# Total runtime: ~60-90 minutes (the three platforms build in parallel).
+# Each platform produces one ~80 MB tarball; the publish job also writes
+# a `checksums.json` mapping `libnode-<platform>.tar.gz -> sha256`.
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      node_ref:
+        description: "Node.js git ref to build (tag like v22.11.0, branch, or commit SHA)"
+        required: true
+        default: 'v22.11.0'
+
+permissions:
+  contents: write   # creating GH Releases + uploading artifacts
+
+jobs:
+  build:
+    name: build (${{ matrix.target }})
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: windows-x64
+            runner: windows-latest
+          - target: linux-x64
+            runner: ubuntu-latest
+          - target: macos-arm64
+            runner: macos-14
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Resolve Node ref
+        id: ref
+        shell: bash
+        run: |
+          ref="${{ inputs.node_ref }}"
+          if [ -z "$ref" ]; then ref="${GITHUB_REF_NAME}"; fi
+          echo "ref=$ref" >> "$GITHUB_OUTPUT"
+          echo "Building Node ref: $ref"
+
+      - name: Setup Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Clone Node
+        shell: bash
+        run: |
+          git clone --depth 1 --branch ${{ steps.ref.outputs.ref }} \
+            https://github.com/nodejs/node.git node-src
+
+      # ---- Windows build -------------------------------------------------
+      - name: Setup MSVC
+        if: matrix.target == 'windows-x64'
+        uses: microsoft/setup-msbuild@v2
+
+      - name: Build libnode (Windows)
+        if: matrix.target == 'windows-x64'
+        shell: cmd
+        working-directory: node-src
+        run: vcbuild.bat dll release x64 no-cctest
+
+      # ---- POSIX builds --------------------------------------------------
+      - name: Build libnode (Linux/macOS)
+        if: matrix.target != 'windows-x64'
+        shell: bash
+        working-directory: node-src
+        run: |
+          ./configure --shared --without-snapshot
+          ncpu=$(nproc 2>/dev/null || sysctl -n hw.ncpu)
+          make -j"$ncpu" node
+
+      # ---- Stage + package ----------------------------------------------
+      - name: Stage tarball
+        shell: bash
+        run: |
+          set -e
+          stage=$(mktemp -d)
+          # Headers only -- skip the .cc/.c sources (huge, never consumed
+          # by the embedder).
+          mkdir -p "$stage/src"
+          (cd node-src/src && find . -name '*.h' -print0 \
+            | xargs -0 -I{} sh -c 'mkdir -p "'"$stage"'/src/$(dirname "$1")" && cp "$1" "'"$stage"'/src/$1"' _ {})
+          mkdir -p "$stage/deps/v8/include" "$stage/deps/uv/include"
+          cp -r node-src/deps/v8/include/. "$stage/deps/v8/include/"
+          cp -r node-src/deps/uv/include/. "$stage/deps/uv/include/"
+          mkdir -p "$stage/out/Release"
+
+          case "${{ matrix.target }}" in
+            windows-*)
+              # vcbuild.bat puts artifacts in node-src/Release/
+              cp node-src/Release/libnode.dll "$stage/out/Release/"
+              cp node-src/Release/libnode.lib "$stage/out/Release/"
+              ;;
+            linux-*)
+              # libnode.so.<major> is the soname; ship it as libnode.so for the embedder.
+              src=$(ls node-src/out/Release/libnode.so* | head -1)
+              cp "$src" "$stage/out/Release/libnode.so"
+              ;;
+            macos-*)
+              src=$(ls node-src/out/Release/libnode.*.dylib | head -1)
+              cp "$src" "$stage/out/Release/libnode.dylib"
+              ;;
+          esac
+
+          tar -czf "libnode-${{ matrix.target }}.tar.gz" -C "$stage" .
+
+          # SHA256 sidecar for the publish job.
+          if command -v sha256sum >/dev/null 2>&1; then
+            sha256sum "libnode-${{ matrix.target }}.tar.gz" > "libnode-${{ matrix.target }}.tar.gz.sha256"
+          else
+            shasum -a 256 "libnode-${{ matrix.target }}.tar.gz" > "libnode-${{ matrix.target }}.tar.gz.sha256"
+          fi
+
+          ls -lh libnode-*.tar.gz*
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: libnode-${{ matrix.target }}
+          path: |
+            libnode-${{ matrix.target }}.tar.gz
+            libnode-${{ matrix.target }}.tar.gz.sha256
+
+  publish:
+    name: publish release
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          merge-multiple: true
+
+      - name: Build checksums.json
+        shell: bash
+        working-directory: artifacts
+        run: |
+          {
+            echo '{'
+            first=1
+            for f in *.tar.gz.sha256; do
+              name=$(basename "$f" .sha256)
+              hash=$(awk '{print $1}' "$f")
+              if [ $first -eq 1 ]; then first=0; else echo ','; fi
+              printf '  "%s": "%s"' "$name" "$hash"
+            done
+            echo
+            echo '}'
+          } > checksums.json
+          cat checksums.json
+
+      - name: Resolve release tag
+        id: tag
+        shell: bash
+        run: |
+          if [ -n "${{ inputs.node_ref }}" ]; then
+            # manual dispatch: use the user-supplied ref as the tag so the
+            # release is identifiable.
+            tag="${{ inputs.node_ref }}"
+          else
+            tag="${GITHUB_REF_NAME}"
+          fi
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+
+      - name: Create release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.tag.outputs.tag }}
+          name: libnode ${{ steps.tag.outputs.tag }}
+          generate_release_notes: true
+          files: |
+            artifacts/*.tar.gz
+            artifacts/checksums.json
+          body: |
+            Pre-built libnode for Rune.
+
+            **Tarball layout** (extracts to `<dir>/`):
+            ```
+            src/                  -- Node + V8 headers (.h only)
+            deps/v8/include/      -- V8 headers
+            deps/uv/include/      -- libuv headers
+            out/Release/          -- libnode.{dll|so|dylib} (+ .lib on Windows)
+            ```
+
+            **Consume from Rune** via `tools/fetch-libnode.mjs`:
+            ```
+            node tools/fetch-libnode.mjs --version ${{ steps.tag.outputs.tag }}
+            ```

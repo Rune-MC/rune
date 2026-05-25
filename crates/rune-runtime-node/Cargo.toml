@@ -1,0 +1,20 @@
+[package]
+name = "rune-runtime-node"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Rune Node.js backend (libnode embedding, replaces rune-runtime-js eventually)."
+
+[dependencies]
+rune-host-api.workspace = true
+log.workspace = true
+ciborium.workspace = true
+crossbeam-channel.workspace = true
+
+[build-dependencies]
+cc = "1.0"
+
+[features]
+# Pre-built libnode in a non-default location.
+# Set RUNE_NODE_ROOT env var to a path containing src/, deps/, out/Release/.
+default = []

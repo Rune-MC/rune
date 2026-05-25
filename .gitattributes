@@ -1,0 +1,41 @@
+# Default: let Git handle line endings on text files.
+* text=auto
+
+# Shell + cross-platform scripts MUST stay LF so they run on Linux/macOS
+# even when authored on Windows.
+*.sh         text eol=lf
+*.mjs        text eol=lf
+*.js         text eol=lf
+gradlew      text eol=lf
+
+# Windows scripts stay CRLF.
+*.ps1        text eol=crlf
+*.bat        text eol=crlf
+*.cmd        text eol=crlf
+
+# Source -- LF everywhere for consistent diffs across platforms.
+*.rs         text eol=lf
+*.kt         text eol=lf
+*.kts        text eol=lf
+*.toml       text eol=lf
+*.yml        text eol=lf
+*.yaml       text eol=lf
+*.json       text eol=lf
+*.jsonc      text eol=lf
+*.ts         text eol=lf
+*.tsx        text eol=lf
+*.md         text eol=lf
+*.h          text eol=lf
+*.cc         text eol=lf
+*.cpp        text eol=lf
+
+# Binary blobs: never modify.
+*.jar        binary
+*.dll        binary
+*.so         binary
+*.dylib      binary
+*.lib        binary
+*.wasm       binary
+*.png        binary
+*.jpg        binary
+*.tar.gz     binary

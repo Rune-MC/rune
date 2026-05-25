@@ -1,0 +1,22 @@
+{
+  "name": "rune-monorepo",
+  "version": "0.1.0",
+  "description": "Polyglot scripting platform for Paper Minecraft servers. Monorepo root.",
+  "private": true,
+  "packageManager": "pnpm@9.12.0",
+  "scripts": {
+    "build":        "turbo run build",
+    "build:plugin": "turbo run build --filter=@rune/plugin",
+    "build:rust":   "cargo build --release -p rune-loader",
+    "test":         "turbo run test",
+    "clean":        "turbo run clean && cargo clean && (cd plugin && ./gradlew clean)",
+    "fetch:libnode":     "node tools/fetch-libnode.mjs",
+    "release:local":     "turbo run release"
+  },
+  "devDependencies": {
+    "turbo": "^2.5.0"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}

@@ -1,0 +1,7 @@
+name: Rune
+version: 0.1.0
+main: app.rune.RunePlugin
+api-version: "1.21"
+author: Rune Project
+description: Polyglot scripting platform for Paper Minecraft servers.
+load: STARTUP

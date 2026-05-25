@@ -1,0 +1,9 @@
+{
+  "name": "@rune/install",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Server-bootstrap scripts (install Paper + Rune, scaffold new script folders).",
+  "scripts": {
+    "build": "echo 'install scripts are shell-only; nothing to build'"
+  }
+}

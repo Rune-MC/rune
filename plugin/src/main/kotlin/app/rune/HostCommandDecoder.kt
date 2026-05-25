@@ -1,0 +1,105 @@
+package app.rune
+
+import co.nstant.`in`.cbor.CborDecoder
+import co.nstant.`in`.cbor.model.Array as CborArray
+import co.nstant.`in`.cbor.model.Map as CborMap
+import co.nstant.`in`.cbor.model.Number as CborNumber
+import co.nstant.`in`.cbor.model.UnicodeString
+
+/**
+ * Decodes the CBOR payload produced by `rune_drain_commands` -- a CBOR array
+ * of maps, each shaped `{"op": "<variant>", ...fields}`. Hand-rolled because
+ * polymorphic decoding via kotlinx-serialization-cbor would require a custom
+ * KSerializer for the discriminant key.
+ */
+object HostCommandDecoder {
+
+    fun decode(bytes: ByteArray): List<HostCommand> {
+        if (bytes.isEmpty()) return emptyList()
+        val items = CborDecoder.decode(bytes)
+        if (items.isEmpty()) return emptyList()
+        val arr = items[0] as? CborArray
+            ?: throw IllegalArgumentException(
+                "expected CBOR array at top level, got ${items[0]::class.simpleName}"
+            )
+
+        return arr.dataItems.map { item ->
+            val map = item as? CborMap
+                ?: throw IllegalArgumentException(
+                    "expected CBOR map for command entry, got ${item::class.simpleName}"
+                )
+            val op = map.getString("op")
+                ?: throw IllegalArgumentException("command entry missing 'op'")
+            when (op) {
+                "broadcast" -> HostCommand.Broadcast(
+                    map.getString("message")
+                        ?: throw IllegalArgumentException("broadcast missing 'message'")
+                )
+                "log" -> HostCommand.Log(
+                    script = map.getString("script") ?: "<?>",
+                    level = map.getString("level") ?: "info",
+                    message = map.getString("message") ?: "",
+                )
+                "subscribe_event" -> HostCommand.SubscribeEvent(
+                    name = map.getString("name")
+                        ?: throw IllegalArgumentException("subscribe_event missing 'name'")
+                )
+                "register_command" -> HostCommand.RegisterCommand(decodeCommandSpec(map))
+                else -> throw IllegalArgumentException("unknown op: $op")
+            }
+        }
+    }
+
+    private fun CborMap.getString(key: String): String? {
+        val value = this[UnicodeString(key)] ?: return null
+        return (value as? UnicodeString)?.string
+    }
+
+    private fun decodeCommandSpec(map: CborMap): CommandSpec {
+        val name = map.getString("name")
+            ?: throw IllegalArgumentException("register_command missing 'name'")
+        val argsRaw = map[UnicodeString("args")] as? CborArray
+        val args = argsRaw?.dataItems.orEmpty().mapNotNull { item ->
+            (item as? CborMap)?.let(::decodeCommandArg)
+        }
+        val aliasesRaw = map[UnicodeString("aliases")] as? CborArray
+        val aliases = aliasesRaw?.dataItems.orEmpty()
+            .mapNotNull { (it as? UnicodeString)?.string }
+        return CommandSpec(
+            name = name,
+            description = map.getString("description") ?: "",
+            permission = map.getString("permission"),
+            aliases = aliases,
+            args = args,
+        )
+    }
+
+    private fun decodeCommandArg(map: CborMap): CommandArg {
+        val suggestionsRaw = map[UnicodeString("suggestions")] as? CborArray
+        val suggestions = suggestionsRaw?.dataItems.orEmpty()
+            .mapNotNull { (it as? UnicodeString)?.string }
+        return CommandArg(
+            name = map.getString("name")
+                ?: throw IllegalArgumentException("command arg missing 'name'"),
+            description = map.getString("description") ?: "",
+            type = map.getString("type") ?: "string",
+            min = (map[UnicodeString("min")] as? CborNumber)?.value?.toDouble(),
+            max = (map[UnicodeString("max")] as? CborNumber)?.value?.toDouble(),
+            greedy = map.getBoolean("greedy") ?: false,
+            optional = map.getBoolean("optional") ?: false,
+            suggestions = suggestions,
+        )
+    }
+
+    private fun CborMap.getBoolean(key: String): Boolean? {
+        val value = this[UnicodeString(key)] ?: return null
+        return when (value) {
+            is co.nstant.`in`.cbor.model.SimpleValue -> when (value.simpleValueType) {
+                co.nstant.`in`.cbor.model.SimpleValueType.TRUE -> true
+                co.nstant.`in`.cbor.model.SimpleValueType.FALSE -> false
+                else -> null
+            }
+            else -> null
+        }
+    }
+}

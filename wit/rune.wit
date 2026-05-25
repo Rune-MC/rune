@@ -1,0 +1,181 @@
+// rune:host -- single source of truth for the Minecraft-facing host API.
+//
+// See DESIGN_SPEC.md §5. Three consumers derive from this file:
+//   * Rust host -- `wasmtime::component::bindgen!` generates the host trait
+//     that the Wasm backend implements.
+//   * Rust guest SDK -- `wit-bindgen::generate!` in `sdk/rust-guest`.
+//   * TS / Python / Lua SDKs mirror these shapes by hand (kept in sync
+//     with this file -- a `.d.ts` / `.pyi` codegen pass is a v1.1 follow-up).
+//
+// Naming rule: kebab-case throughout. Field names that would otherwise be
+// reserved words in a target language are aliased in the SDK layer, not here.
+
+package rune:host@0.1.0;
+
+interface types {
+    record block-pos {
+        x: s32,
+        y: s32,
+        z: s32,
+    }
+
+    record vec3 {
+        x: f64,
+        y: f64,
+        z: f64,
+    }
+
+    record quaternion {
+        x: f64,
+        y: f64,
+        z: f64,
+        w: f64,
+    }
+
+    /// Opaque player / entity reference. Encoded across the CBOR wire as a
+    /// UUID-format string matching `java.util.UUID.toString()`.
+    type entity-id = string;
+
+    /// Opaque handle for a display entity created via `display.create-*`.
+    /// Same encoding as `entity-id`. Lifecycle is host-owned: a
+    /// `events.on-display-removed` event fires when the entity dies or its
+    /// chunk unloads (see DESIGN_SPEC.md §16 item 4).
+    type display-handle = string;
+
+    record block {
+        /// Resource id, e.g. `"minecraft:stone"`.
+        id: string,
+    }
+
+    record transform {
+        translation: vec3,
+        scale: vec3,
+        rotation: quaternion,
+    }
+}
+
+interface world {
+    use types.{block-pos, vec3, block, entity-id};
+
+    get-block: func(world: string, pos: block-pos) -> result<block, string>;
+    set-block: func(world: string, pos: block-pos, block: block) -> result<_, string>;
+    fill: func(world: string, min: block-pos, max: block-pos, block: block) -> result<_, string>;
+    spawn-entity: func(world: string, kind: string, pos: vec3) -> result<entity-id, string>;
+}
+
+interface player {
+    use types.{vec3, entity-id};
+
+    send-message: func(player: entity-id, message: string);
+    get-name: func(player: entity-id) -> option<string>;
+    get-position: func(player: entity-id) -> option<vec3>;
+    teleport: func(player: entity-id, pos: vec3) -> result<_, string>;
+    online: func() -> list<entity-id>;
+}
+
+interface chat {
+    broadcast: func(message: string);
+}
+
+interface display {
+    use types.{vec3, block, transform, display-handle};
+
+    create-text: func(world: string, pos: vec3, text: string) -> result<display-handle, string>;
+    create-block: func(world: string, pos: vec3, block: block) -> result<display-handle, string>;
+    create-item: func(world: string, pos: vec3, item: string) -> result<display-handle, string>;
+
+    /// `interpolation-ticks` > 0 enables smooth interpolation to the new
+    /// transform over that many server ticks (display-entity feature, 1.19.4+).
+    set-transform: func(handle: display-handle, t: transform, interpolation-ticks: u32) -> result<_, string>;
+    set-text: func(handle: display-handle, text: string) -> result<_, string>;
+    destroy: func(handle: display-handle) -> result<_, string>;
+}
+
+interface dialog {
+    use types.{entity-id};
+
+    record button {
+        id: string,
+        label: string,
+    }
+
+    record dialog-spec {
+        title: string,
+        body: string,
+        buttons: list<button>,
+    }
+
+    /// Show a server-driven dialog (1.21+ feature) to a player. Returns the
+    /// reply-id immediately; the chosen button arrives later as
+    /// `events.on-dialog-result` with the matching reply-id.
+    /// See DESIGN_SPEC.md §16 item 3 for the correlation design.
+    show: func(player: entity-id, spec: dialog-spec) -> string;
+}
+
+interface scheduler {
+    /// Run a guest callback once after `ticks` server ticks. `callback-id`
+    /// is a guest-allocated handle the guest's runtime uses to dispatch when
+    /// the host re-enters the guest via the timer hook.
+    after: func(ticks: u64, callback-id: u64);
+
+    /// Run a guest callback every `ticks` ticks. Returns a host-side handle
+    /// the guest can pass to `cancel`.
+    every: func(ticks: u64, callback-id: u64) -> u64;
+
+    cancel: func(handle: u64);
+}
+
+interface events {
+    use types.{block-pos, entity-id, display-handle};
+
+    record join-event {
+        name: string,
+        player: entity-id,
+    }
+
+    record quit-event {
+        name: string,
+        player: entity-id,
+    }
+
+    record chat-event {
+        player: entity-id,
+        message: string,
+    }
+
+    record break-event {
+        player: entity-id,
+        pos: block-pos,
+        block: string,
+    }
+
+    record dialog-result-event {
+        reply-id: string,
+        button-id: string,
+    }
+
+    record display-removed-event {
+        handle: display-handle,
+    }
+
+    on-player-join: func(e: join-event);
+    on-player-quit: func(e: quit-event);
+    on-player-chat: func(e: chat-event);
+    on-block-break: func(e: break-event);
+    on-dialog-result: func(e: dialog-result-event);
+    on-display-removed: func(e: display-removed-event);
+}
+
+/// Surface presented to Wasm guests. Native runtimes (JS/Python/Lua) mirror
+/// this shape by hand in their SDKs (DESIGN_SPEC.md §5.2).
+world rune-guest {
+    import types;
+    import world;
+    import player;
+    import chat;
+    import display;
+    import dialog;
+    import scheduler;
+
+    export events;
+}

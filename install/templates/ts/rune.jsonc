@@ -1,0 +1,20 @@
+{
+  // Bukkit plugin deps for this script. Each declared plugin is checked
+  // for presence at enable; types for it are dumped to
+  // ../types/<alias>.d.ts so IDE autocomplete works.
+  //
+  // "plugins": {
+  //   "PlaceholderAPI": {
+  //     "alias":    "papi",
+  //     "package":  "me.clip.placeholderapi",
+  //     "required": true
+  //   }
+  // },
+
+  // Shortcut globals bound at bootstrap. Map a desired name to a dotted
+  // path on globalThis.
+  "aliases": {
+    // "mm":        "kyori.adventure.text.minimessage",
+    // "Component": "kyori.adventure.text.Component"
+  }
+}

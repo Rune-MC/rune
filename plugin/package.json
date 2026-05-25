@@ -1,0 +1,15 @@
+{
+  "name": "@rune/plugin",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Paper plugin (Kotlin + Panama FFM) -- the JVM-side of Rune.",
+  "scripts": {
+    "build": "./gradlew shadowJar -Pwith-node --no-daemon",
+    "clean": "./gradlew clean --no-daemon",
+    "test":  "./gradlew test --no-daemon"
+  },
+  "dependencies": {
+    "@rune/loader":        "workspace:*",
+    "@rune/runtime-node":  "workspace:*"
+  }
+}

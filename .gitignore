@@ -1,0 +1,52 @@
+# ---- Rust ------------------------------------------------------------------
+target/
+**/*.rs.bk
+*.pdb
+
+# ---- Gradle / JVM ----------------------------------------------------------
+.gradle/
+build/
+!plugin/src/**/build/
+out/
+*.class
+*.jar
+!plugin/src/**/*.jar
+hs_err_pid*.log
+
+# ---- Node / pnpm -----------------------------------------------------------
+node_modules/
+.pnpm-store/
+*.tgz
+*.log
+
+# Lock files we DO want committed for reproducibility:
+# Cargo.lock (committed)
+# pnpm-lock.yaml (committed)
+
+# ---- Turbo -----------------------------------------------------------------
+.turbo/
+
+# ---- Pre-built libnode (downloaded by tools/fetch-libnode.mjs) -------------
+tools/libnode-cache/
+# Local packaging output (uploaded manually to the prebuilts repo if needed).
+libnode-*.tar.gz
+*.sha256
+
+# ---- IDEs / editors --------------------------------------------------------
+.idea/
+*.iml
+.vscode/
+*.swp
+*.swo
+.DS_Store
+Thumbs.db
+
+# ---- Claude Code scratch ---------------------------------------------------
+.claude/settings.local.json
+.claude/projects/
+
+# ---- Misc / artifacts ------------------------------------------------------
+*.tmp
+release/
+dist/
+artifacts/

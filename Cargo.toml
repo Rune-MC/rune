@@ -1,0 +1,41 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/rune-host-api",
+    "crates/rune-runtime-node",
+    "crates/rune-loader",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "Apache-2.0"
+repository = "https://github.com/anthropics/rune"
+description = "Polyglot scripting platform for Paper Minecraft servers."
+
+[workspace.dependencies]
+# Wire format (DESIGN_SPEC.md §6.3 -- CBOR via ciborium).
+ciborium = "0.2"
+serde = { version = "1", features = ["derive"] }
+serde_bytes = "0.11"
+
+# Channels (guest -> host command queue).
+crossbeam-channel = "0.5"
+
+# Error / logging.
+thiserror = "2"
+log = "0.4"
+env_logger = "0.11"
+
+# Identifiers.
+uuid = { version = "1", features = ["v4", "serde"] }
+
+# Internal crates.
+rune-host-api      = { path = "crates/rune-host-api" }
+rune-runtime-node  = { path = "crates/rune-runtime-node" }
+
+[profile.release]
+opt-level = 3
+lto = "thin"
+codegen-units = 1
+strip = "symbols"

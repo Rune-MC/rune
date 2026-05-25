@@ -1,0 +1,13 @@
+{
+  "name": "@rune/runtime-node",
+  "version": "0.1.0",
+  "private": true,
+  "description": "libnode-embedded JS runtime backend.",
+  "scripts": {
+    "build": "cargo build --release -p rune-runtime-node",
+    "clean": "cargo clean -p rune-runtime-node"
+  },
+  "dependencies": {
+    "@rune/host-api": "workspace:*"
+  }
+}

@@ -1,0 +1,21 @@
+[package]
+name = "rune-loader"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Rune cdylib: C ABI surface, runtime routing, command aggregation."
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+rune-host-api.workspace = true
+rune-runtime-node.workspace = true
+
+ciborium.workspace = true
+log.workspace = true
+env_logger.workspace = true
+
+[dev-dependencies]
+tempfile = "3"
+rune-host-api.workspace = true
