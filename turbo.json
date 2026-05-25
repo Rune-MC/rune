@@ -9,7 +9,8 @@
         "build/libs/**",
         "dist/**"
       ],
-      "cache": true
+      "cache": true,
+      "env": ["RUNE_NODE_ROOT", "RUNE_NODE_VERSION"]
     },
     "test": {
       "dependsOn": ["build"],
