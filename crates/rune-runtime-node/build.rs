@@ -108,7 +108,7 @@ fn resolve_node_root() -> PathBuf {
         return PathBuf::from(v);
     }
 
-    let version = env::var("RUNE_NODE_VERSION").unwrap_or_else(|_| "22.11.0".into());
+    let version = env::var("RUNE_NODE_VERSION").unwrap_or_else(|_| "22.18.0".into());
     let platform = detect_host_platform();
     // build.rs lives at crates/rune-runtime-node/build.rs; repo root is two up.
     let repo_root = Path::new(env!("CARGO_MANIFEST_DIR"))

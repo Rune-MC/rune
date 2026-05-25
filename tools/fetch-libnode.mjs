@@ -17,7 +17,7 @@
 // Usage:
 //   node tools/fetch-libnode.mjs                       # current platform
 //   node tools/fetch-libnode.mjs --platform windows-x64
-//   node tools/fetch-libnode.mjs --version 22.11.0
+//   node tools/fetch-libnode.mjs --version 22.18.0
 //   node tools/fetch-libnode.mjs --base-url https://github.com/your-org/libnode-prebuilts/releases/download
 
 import { mkdir, writeFile, access, readFile } from 'node:fs/promises';
@@ -34,7 +34,7 @@ const REPO_ROOT  = resolve(__dirname, '..');
 const CACHE_DIR  = join(REPO_ROOT, 'tools', 'libnode-cache');
 
 const DEFAULTS = {
-  version: '22.11.0',
+  version: '22.18.0',
   // Where the pre-built tarballs are published. PLACEHOLDER -- change to
   // wherever you host them (GitHub Releases, S3, etc.) once you have a
   // build pipeline. The tarball at
