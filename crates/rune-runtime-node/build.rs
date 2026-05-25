@@ -84,6 +84,13 @@ fn main() {
         // clang / g++ on macOS + Linux.
         build
             .flag("-std=c++20")
+            // V8 headers contain dozens of empty default virtual method
+            // bodies (`virtual void Foo(int x) {}`) -- legitimate API
+            // shape, but every consumer build re-emits a wall of
+            // -Wunused-parameter warnings against them. Silence at the
+            // shim-build level so CI logs stay scannable; doesn't
+            // suppress warnings in OUR code.
+            .flag("-Wno-unused-parameter")
             // Same rationale as the MSVC defines above: we consume V8 from
             // libnode rather than building our own copy.
             .define("BUILDING_NODE_EXTENSION", None)
