@@ -21,6 +21,10 @@ jobs:
   build:
     name: build (${{ matrix.target }})
     runs-on: ${{ matrix.runner }}
+    # Tolerate a single platform breaking (e.g. Linux when its libnode
+    # prebuilt hasn't been published yet). The successful platforms still
+    # publish; the failed one stays red in the run UI so it's visible.
+    continue-on-error: true
     strategy:
       fail-fast: false
       matrix:
