@@ -11,6 +11,9 @@ out/
 *.class
 *.jar
 !plugin/src/**/*.jar
+# Gradle wrapper jar is critical -- gradlew.bat / ./gradlew invokes it.
+# Without it gradle won't start.
+!plugin/gradle/wrapper/gradle-wrapper.jar
 hs_err_pid*.log
 
 # ---- Node / pnpm -----------------------------------------------------------

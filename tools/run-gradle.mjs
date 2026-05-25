@@ -9,7 +9,7 @@
 //   "build": "node ../tools/run-gradle.mjs shadowJar"
 
 import { spawnSync } from 'node:child_process';
-import { existsSync } from 'node:fs';
+import { chmodSync, existsSync, statSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { argv, cwd, exit, platform } from 'node:process';
 
@@ -23,7 +23,19 @@ if (!existsSync(wrapperPath)) {
   exit(1);
 }
 
+// Repo authored on Windows -> the POSIX gradlew loses its +x bit when
+// committed (Windows FS has no executable flag). Force it back here so
+// the spawn doesn't silently EACCES.
+if (platform !== 'win32') {
+  const mode = statSync(wrapperPath).mode;
+  if (!(mode & 0o111)) {
+    chmodSync(wrapperPath, mode | 0o755);
+    console.log(`[run-gradle] chmod +x ${wrapperPath}`);
+  }
+}
+
 const args = argv.slice(2);
+console.log(`[run-gradle] $ ${wrapperName} ${args.join(' ')}`);
 const result = spawnSync(wrapperName, args, {
   stdio: 'inherit',
   cwd: cwd(),
@@ -31,4 +43,7 @@ const result = spawnSync(wrapperName, args, {
   // the explicit `./gradlew` works without a shell wrapper.
   shell: platform === 'win32',
 });
+if (result.error) {
+  console.error(`[run-gradle] spawn error: ${result.error.message}`);
+}
 exit(result.status ?? 1);
