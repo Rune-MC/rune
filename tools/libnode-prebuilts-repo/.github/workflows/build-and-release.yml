@@ -81,8 +81,24 @@ jobs:
         working-directory: node-src
         run: |
           ./configure --shared --without-snapshot
-          ncpu=$(nproc 2>/dev/null || sysctl -n hw.ncpu)
-          make -j"$ncpu" node
+          # V8's cppgc / turboshaft objects can consume 4-6 GB each at compile
+          # time. ubuntu-latest has 16 GB RAM, so -jN with N=nproc (4) blows
+          # past it and the runner OOM-swaps for hours. Cap at -j2 on Linux;
+          # macOS-arm64 has 7 GB but Apple Silicon's compile-throughput
+          # offsets the loss.
+          case "${{ matrix.target }}" in
+            linux-*)
+              jobs=2
+              ;;
+            macos-*)
+              jobs=$(sysctl -n hw.ncpu)
+              ;;
+            *)
+              jobs=$(nproc 2>/dev/null || echo 2)
+              ;;
+          esac
+          echo "Building with -j$jobs"
+          make -j"$jobs" node
 
       # ---- Stage + package ----------------------------------------------
       - name: Stage tarball
