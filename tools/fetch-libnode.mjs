@@ -117,16 +117,32 @@ async function main() {
   try {
     await download(tarUrl, tarPath);
   } catch (e) {
-    console.error(`[fetch-libnode] download failed: ${e.message}`);
-    console.error(`[fetch-libnode]
-  No pre-built libnode at the configured URL. Options:
-    1. Build libnode from source (slow, multi-GB). Follow
-       https://github.com/nodejs/node/blob/main/BUILDING.md and point
-       RUNE_NODE_ROOT at the resulting tree.
-    2. Override --base-url to a mirror that hosts prebuilts.
-    3. If you HAVE a tarball locally, drop it at:
+    console.error(`
+[fetch-libnode] DOWNLOAD FAILED -- ${e.message}
+
+  Tried:        ${tarUrl}
+  Cache target: ${installDir}
+
+  Most likely cause: the v${opts.version} release in the prebuilts repo
+  doesn't exist yet (or doesn't include libnode-${opts.platform}.tar.gz).
+
+  Fix in order of preference:
+    1. Cut the prebuilts release:
+         cd <your libnode-prebuilts checkout>
+         git tag v${opts.version}
+         git push origin v${opts.version}
+       Wait ~60-90 min for its CI to finish, then re-run this script.
+
+    2. Drop a pre-built tarball into the cache by hand:
          ${tarPath}
-       and re-run this script (the download is skipped if the file exists).
+       (this script skips the download if the file already exists)
+       and re-run.
+
+    3. Override --base-url to a mirror that hosts the prebuilts.
+
+    4. Build libnode from source yourself (slow, multi-GB) and set
+         $env:RUNE_NODE_ROOT = '<path to built node tree>'
+       to skip this script entirely.
 `);
     exit(1);
   }

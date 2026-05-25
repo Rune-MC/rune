@@ -38,9 +38,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - uses: pnpm/action-setup@v4
-        with:
-          version: 9
+      - uses: pnpm/action-setup@v4   # version comes from packageManager in package.json
 
       - uses: actions/setup-node@v4
         with:
@@ -57,6 +55,22 @@ jobs:
       - name: Install LLVM (Windows)
         if: matrix.target == 'windows-x64'
         run: choco install llvm --no-progress -y
+
+      # Don't start a release build (or upload artifacts) if the prebuilt
+      # for this platform doesn't exist in Rune-MC/libnode-prebuilts. Fail
+      # at minute 0 with a clear pointer instead of mid-cargo-build.
+      - name: Verify libnode prebuilt is published
+        shell: bash
+        run: |
+          url="${{ env.LIBNODE_BASE_URL }}/v${{ env.RUNE_NODE_VERSION }}/libnode-${{ matrix.target }}.tar.gz"
+          echo "Checking $url"
+          status=$(curl -sIL -o /dev/null -w '%{http_code}' "$url")
+          if [ "$status" != "200" ]; then
+            echo "::error::No libnode prebuilt for v${RUNE_NODE_VERSION} / ${{ matrix.target }} (HTTP $status)."
+            echo "::error::Expected URL: $url"
+            echo "::error::Fix: cut the v${RUNE_NODE_VERSION} release in Rune-MC/libnode-prebuilts first."
+            exit 1
+          fi
 
       - name: Fetch libnode
         run: node tools/fetch-libnode.mjs --platform ${{ matrix.target }} --base-url ${{ env.LIBNODE_BASE_URL }}

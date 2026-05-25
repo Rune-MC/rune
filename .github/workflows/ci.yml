@@ -35,9 +35,9 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Setup pnpm
+        # version is read from packageManager in package.json -- passing
+        # it here too is a hard error (ERR_PNPM_BAD_PM_VERSION).
         uses: pnpm/action-setup@v4
-        with:
-          version: 9
 
       - name: Setup Node
         uses: actions/setup-node@v4
@@ -69,6 +69,24 @@ jobs:
       - name: Install LLVM (Windows)
         if: matrix.target == 'windows-x64'
         run: choco install llvm --no-progress -y
+
+      # Verify the libnode-prebuilts release exists BEFORE doing any work.
+      # If the prebuilt isn't published yet (e.g. you bumped RUNE_NODE_VERSION
+      # without cutting the corresponding tag in Rune-MC/libnode-prebuilts),
+      # fail loud with a pointer instead of dying mid-build.
+      - name: Verify libnode prebuilt is published
+        shell: bash
+        run: |
+          url="${{ env.LIBNODE_BASE_URL }}/v${{ env.RUNE_NODE_VERSION }}/libnode-${{ matrix.target }}.tar.gz"
+          echo "Checking $url"
+          status=$(curl -sIL -o /dev/null -w '%{http_code}' "$url")
+          if [ "$status" != "200" ]; then
+            echo "::error::No libnode prebuilt for v${RUNE_NODE_VERSION} / ${{ matrix.target }} (HTTP $status)."
+            echo "::error::Expected URL: $url"
+            echo "::error::Fix: cut the v${RUNE_NODE_VERSION} release in Rune-MC/libnode-prebuilts (push the tag,"
+            echo "::error::wait ~60-90 min for its CI to finish, then re-run this job)."
+            exit 1
+          fi
 
       - name: Fetch libnode
         run: node tools/fetch-libnode.mjs --platform ${{ matrix.target }} --base-url ${{ env.LIBNODE_BASE_URL }}
