@@ -86,7 +86,7 @@ fun hostPlatform(): Triple<String, String, String> {
 fun resolveLibnodeRoot(): java.io.File? {
     System.getenv("RUNE_NODE_ROOT")?.let { return file(it) }
 
-    val version = System.getenv("RUNE_NODE_VERSION") ?: "22.18.0"
+    val version = System.getenv("RUNE_NODE_VERSION") ?: "22.20.0"
     val (platformDir, _, _) = hostPlatform()
     // tools/libnode-cache lives at the repo root (parent of `plugin/`).
     val cache = rootProject.projectDir.parentFile

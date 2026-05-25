@@ -14,7 +14,7 @@ permissions:
   contents: write   # creating GH Releases + uploading artifacts
 
 env:
-  RUNE_NODE_VERSION: "22.18.0"
+  RUNE_NODE_VERSION: "22.20.0"
   LIBNODE_BASE_URL: ${{ vars.LIBNODE_BASE_URL || 'https://github.com/Rune-MC/libnode-prebuilts/releases/download' }}
 
 jobs:

@@ -13,7 +13,7 @@ concurrency:
 # Where pre-built libnode tarballs live. Override per-fork via repo
 # variable LIBNODE_BASE_URL if you host them somewhere else.
 env:
-  RUNE_NODE_VERSION: "22.18.0"
+  RUNE_NODE_VERSION: "22.20.0"
   LIBNODE_BASE_URL: ${{ vars.LIBNODE_BASE_URL || 'https://github.com/Rune-MC/libnode-prebuilts/releases/download' }}
 
 jobs:
