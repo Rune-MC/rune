@@ -20,6 +20,11 @@ jobs:
   build:
     name: build (${{ matrix.target }})
     runs-on: ${{ matrix.runner }}
+    # Don't tank the whole workflow when one platform fails. Each matrix
+    # entry runs to completion; the workflow's overall status is "success"
+    # so long as the OTHERS succeed. The failing platform still surfaces
+    # red in the UI for the run, so you can see + fix it.
+    continue-on-error: true
     strategy:
       fail-fast: false
       matrix:

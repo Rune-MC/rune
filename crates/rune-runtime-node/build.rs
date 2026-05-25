@@ -24,15 +24,28 @@ fn main() {
     let uv_inc = node_root.join("deps/uv/include");
     let lib_dir = node_root.join("out/Release");
 
+    // Platform-specific libnode shared-library artifact in out/Release/:
+    //   Windows: libnode.lib (import lib; libnode.dll loads at runtime)
+    //   macOS:   libnode.dylib
+    //   Linux:   libnode.so
+    let (lib_filename, runtime_filename) = if cfg!(target_os = "windows") {
+        ("libnode.lib", "libnode.dll")
+    } else if cfg!(target_os = "macos") {
+        ("libnode.dylib", "libnode.dylib")
+    } else {
+        ("libnode.so", "libnode.so")
+    };
+
     assert!(
         src_dir.join("node.h").exists(),
         "libnode source not found: {}/src/node.h missing",
         node_root.display()
     );
     assert!(
-        lib_dir.join("libnode.lib").exists(),
-        "libnode build artifact not found: {}/out/Release/libnode.lib missing",
-        node_root.display()
+        lib_dir.join(lib_filename).exists(),
+        "libnode build artifact not found: {}/out/Release/{} missing",
+        node_root.display(),
+        lib_filename
     );
 
     let mut build = cc::Build::new();
@@ -68,32 +81,62 @@ fn main() {
                 .define("V8_31BIT_SMIS_ON_64BIT_ARCH", None);
         }
     } else {
-        build.flag("-std=c++20");
+        // clang / g++ on macOS + Linux.
+        build
+            .flag("-std=c++20")
+            // Same rationale as the MSVC defines above: we consume V8 from
+            // libnode rather than building our own copy.
+            .define("BUILDING_NODE_EXTENSION", None)
+            .define("USING_V8_SHARED", "1")
+            .define("USING_UV_SHARED", "1");
+        if env::var("RUNE_NODE_V8_PTRCOMP").as_deref() == Ok("1") {
+            build
+                .define("V8_COMPRESS_POINTERS", None)
+                .define("V8_31BIT_SMIS_ON_64BIT_ARCH", None);
+        }
     }
 
     build.compile("rune_node");
 
-    // Tell the linker where libnode.lib lives and to link against it.
+    // Linker search path always points at the prebuilt's out/Release/.
     println!("cargo:rustc-link-search=native={}", lib_dir.display());
-    println!("cargo:rustc-link-lib=dylib=libnode");
 
-    // V8 headers always emit out-of-line copies of inline methods
-    // (Isolate::Enter, TryCatch ctor, etc.) into the consuming object file.
-    // libnode.dll also exports those symbols. Allow the linker to pick one
-    // -- standard Node-addon-build dance. /IGNORE:4006 suppresses the
-    // matching LNK4006 second-definition warnings.
+    // Link directive needs a platform-aware library name. On MSVC the
+    // .lib has no `lib` prefix so we pass the full stem; clang/ld add
+    // `lib` + `.{so,dylib}` themselves, so we pass just `node`.
     if cfg!(target_env = "msvc") {
+        println!("cargo:rustc-link-lib=dylib=libnode");
+    } else {
+        println!("cargo:rustc-link-lib=dylib=node");
+    }
+
+    if cfg!(target_env = "msvc") {
+        // V8 headers always emit out-of-line copies of inline methods
+        // (Isolate::Enter, TryCatch ctor, etc.) into the consuming object
+        // file. libnode.dll also exports those symbols. Allow the linker
+        // to pick one -- standard Node-addon-build dance. /IGNORE:4006
+        // suppresses the matching LNK4006 second-definition warnings.
         println!("cargo:rustc-link-arg=/FORCE:MULTIPLE");
         println!("cargo:rustc-link-arg=/IGNORE:4006");
         println!("cargo:rustc-link-arg=/IGNORE:4088");
+    } else if cfg!(target_os = "macos") {
+        // Make the dynamic linker look for libnode.dylib next to the
+        // loaded rune_loader.dylib at runtime. The plugin extractor
+        // drops both DLLs into the same dir, so @loader_path is what
+        // we want.
+        println!("cargo:rustc-link-arg=-Wl,-rpath,@loader_path");
+    } else {
+        // Linux equivalent of @loader_path.
+        println!("cargo:rustc-link-arg=-Wl,-rpath,$ORIGIN");
+        // Avoid the unresolved-symbol-at-link-time error LD throws when
+        // V8 inline helpers leak across the shim/libnode boundary.
+        println!("cargo:rustc-link-arg=-Wl,--allow-shlib-undefined");
     }
 
-    // On Windows we also need to copy libnode.dll next to the final cdylib
-    // so it loads at runtime. The plugin's NativeLibraryExtractor needs to
-    // ship both DLLs in resources/native/<os>-<arch>/.
     println!(
-        "cargo:warning=remember to ship {}/libnode.dll alongside rune_loader.dll",
-        lib_dir.display()
+        "cargo:warning=remember to ship {}/{} alongside the rune_loader cdylib",
+        lib_dir.display(),
+        runtime_filename
     );
 }
 
