@@ -37,20 +37,40 @@ class ScriptCommandRegistry(
     private val refRegistry: RefRegistry,
 ) {
     private val specs: MutableList<CommandSpec> = mutableListOf()
-    private val registeredNames: MutableSet<String> = mutableSetOf()
+    private val brigadierRegistered: MutableSet<String> = mutableSetOf()
+    /** Roots that have already had a "shape change needs restart" warning. */
+    private val warnedShapeFrozen: MutableSet<String> = mutableSetOf()
 
-    /** Called by [CommandExecutor] when it sees a RegisterCommand HostCommand. */
+    /**
+     * Called by [CommandExecutor] when it sees a RegisterCommand HostCommand.
+     *
+     * Before [registerWithBrigadier] runs, repeated queues for the same root
+     * REPLACE the prior spec -- this lets the decorator API aggregate leaves
+     * across many `@Command("pex user add")` classes into one root tree
+     * incrementally, re-emitting the full tree on each leaf addition.
+     *
+     * After Brigadier registration, subsequent updates silently refresh the
+     * JS-side handler routing (the Brigadier tree is locked, but JS event
+     * dispatch picks up new handler bodies automatically). We warn ONCE per
+     * root that arg-shape changes need a restart.
+     */
     fun queue(spec: CommandSpec) {
-        if (registeredNames.contains(spec.name)) {
-            plugin.logger.warning(
-                "command '${spec.name}' was already registered with Brigadier; " +
-                    "its handler body will update on /rune reload, but argument " +
-                    "shape changes require a server restart."
-            )
+        if (brigadierRegistered.contains(spec.name)) {
+            if (warnedShapeFrozen.add(spec.name)) {
+                plugin.logger.info(
+                    "command '${spec.name}' already wired with Brigadier; " +
+                        "handler bodies refresh on /rune reload, but arg-shape " +
+                        "changes (new subcommands, new args) require a server restart."
+                )
+            }
             return
         }
-        specs.add(spec)
-        registeredNames.add(spec.name)
+        val existingIdx = specs.indexOfFirst { it.name == spec.name }
+        if (existingIdx >= 0) {
+            specs[existingIdx] = spec
+        } else {
+            specs.add(spec)
+        }
     }
 
     /**
@@ -67,10 +87,50 @@ class ScriptCommandRegistry(
             try {
                 val node = buildNode(spec, native).build()
                 commands.register(node, spec.description.ifEmpty { null }, spec.aliases)
+                brigadierRegistered.add(spec.name)
                 plugin.logger.info("registered script command /${spec.name}")
+                // Dump the tree so users can debug "where did my subcommand
+                // go?" without printf-debugging the JS bootstrap.
+                plugin.logger.info(describeTree(spec, indent = 1))
             } catch (e: Throwable) {
                 plugin.logger.warning("failed to register command /${spec.name}: ${e.message}")
             }
+        }
+    }
+
+    /**
+     * Human-readable dump of a CommandSpec tree -- used when we register a
+     * command to show admins exactly which subcommands + args + suggesters
+     * landed in Brigadier.
+     */
+    private fun describeTree(spec: CommandSpec, indent: Int): String = buildString {
+        val pad = "  ".repeat(indent)
+        if (spec.args.isNotEmpty()) {
+            for (a in spec.args) {
+                val sug = when {
+                    a.suggesterId != null -> " suggest=dynamic"
+                    a.suggestions.isNotEmpty() -> " suggest=[${a.suggestions.joinToString(",")}]"
+                    else -> ""
+                }
+                append(pad).append("<${a.name}:${a.type}>").append(sug)
+                if (a.subcommands.isNotEmpty()) {
+                    append('\n')
+                    for (sub in a.subcommands) {
+                        append(pad).append("  ").append("|- ").append(sub.name)
+                        if (sub.hasExecutor) append(" [run]")
+                        append('\n')
+                        append(describeTree(sub, indent + 2))
+                    }
+                } else {
+                    append('\n')
+                }
+            }
+        }
+        for (sub in spec.subcommands) {
+            append(pad).append("|- ").append(sub.name)
+            if (sub.hasExecutor) append(" [run]")
+            append('\n')
+            append(describeTree(sub, indent + 1))
         }
     }
 
@@ -79,59 +139,121 @@ class ScriptCommandRegistry(
         if (!spec.permission.isNullOrEmpty()) {
             root.requires { it.sender.hasPermission(spec.permission) }
         }
-
-        if (spec.args.isEmpty()) {
-            root.executes { ctx -> dispatch(spec, ctx, emptyMap(), native) }
-            return root
-        }
-
-        // Build the arg chain back-to-front so each arg's `.then(next)` has
-        // its successor ready. Each level can also be a terminal if the arg
-        // is marked optional -- that creates a Brigadier branch that dispatches
-        // without consuming the rest.
-        val argNodes = spec.args.map { arg ->
-            val node = buildArgumentNode(arg)
-            if (arg.suggestions.isNotEmpty()) {
-                node.suggests(staticSuggester(arg.suggestions))
-            }
-            arg to node
-        }
-        // Wire executes() and chain.
-        for (i in argNodes.indices.reversed()) {
-            val (arg, node) = argNodes[i]
-            // If this is the last required arg (or any arg, really), bind
-            // executes that parses everything up to here.
-            node.executes { ctx ->
-                val resolved = LinkedHashMap<String, Any?>()
-                for (j in 0..i) {
-                    val a = argNodes[j].first
-                    resolved[a.name] = readArg(ctx, a)
-                }
-                dispatch(spec, ctx, resolved, native)
-            }
-            if (i < argNodes.size - 1) {
-                node.then(argNodes[i + 1].second)
-            }
-            // Optional args: also wire the parent (i-1) to be a terminal,
-            // handled below in root's executes-when-no-args branch.
-        }
-        root.then(argNodes[0].second)
-
-        // If the first arg is optional, also let the bare command run.
-        if (spec.args[0].optional) {
-            root.executes { ctx -> dispatch(spec, ctx, emptyMap(), native) }
-        }
+        attachSpec(root, spec, native, prevArgs = emptyList())
         return root
     }
 
     /**
+     * Wire `spec`'s args, subcommands, and executor onto a Brigadier node
+     * (`builder`). Recursive: each subcommand becomes a literal child,
+     * its own args + subcommands wired in turn.
+     *
+     * `prevArgs` accumulates the parent-chain's resolved args so a leaf
+     * executor can read EVERY arg above it (e.g. `/pex user <player> add
+     * <perm>` -> handler sees {player, perm}, not just {perm}).
+     */
+    private fun attachSpec(
+        builder: ArgumentBuilder<CommandSourceStack, *>,
+        spec: CommandSpec,
+        native: NativeLoader,
+        prevArgs: List<CommandArg>,
+    ) {
+        val argNodes: List<Pair<CommandArg, RequiredArgumentBuilder<CommandSourceStack, *>>> =
+            spec.args.map { arg ->
+                val node = buildArgumentNode(arg)
+                wireSuggestions(node, arg, native)
+                arg to node
+            }
+
+        // Chain args together; each arg can also carry its OWN subcommands
+        // (arg.subcommands) which attach as children AFTER that arg slot.
+        // Walk back-to-front so `.then(next)` sees its successor first.
+        for (i in argNodes.indices.reversed()) {
+            val (arg, node) = argNodes[i]
+            if (i < argNodes.size - 1) {
+                node.then(argNodes[i + 1].second)
+            }
+            // Optional args branch: every node at-or-after an optional arg
+            // can be a terminal executor.
+            val argsHere = prevArgs + spec.args.take(i + 1)
+            if (spec.hasExecutor && (i == argNodes.size - 1 || spec.args[i + 1].optional)) {
+                node.executes { ctx -> dispatch(spec, ctx, readArgs(ctx, argsHere), native) }
+            }
+            // Per-arg subcommands: attach to THIS arg's node (so e.g.
+            //   /pex group <name> create
+            // works with "create" as a child of the <name> arg, while
+            //   /pex group list
+            // sits at the parent-spec level as a sibling of <name>).
+            for (sub in arg.subcommands) {
+                val subNode = Commands.literal(sub.name)
+                if (!sub.permission.isNullOrEmpty()) {
+                    subNode.requires { it.sender.hasPermission(sub.permission) }
+                }
+                attachSpec(subNode, sub, native, prevArgs = argsHere)
+                node.then(subNode)
+            }
+        }
+
+        // Sibling subcommands of THIS spec attach to the builder (literal
+        // node at THIS level), as siblings of the arg chain.
+        for (sub in spec.subcommands) {
+            val subNode = Commands.literal(sub.name)
+            if (!sub.permission.isNullOrEmpty()) {
+                subNode.requires { it.sender.hasPermission(sub.permission) }
+            }
+            attachSpec(subNode, sub, native, prevArgs = prevArgs)
+            builder.then(subNode)
+        }
+        if (argNodes.isNotEmpty()) {
+            builder.then(argNodes[0].second)
+        }
+
+        // Bind executes() on the builder itself for the "no further args"
+        // path. Two cases:
+        //   1. spec has no args and has executor -> always execute
+        //   2. spec has args but the FIRST is optional -> also execute
+        //      with no args supplied
+        val noArgsExecute = spec.hasExecutor &&
+            (spec.args.isEmpty() || spec.args[0].optional)
+        if (noArgsExecute) {
+            builder.executes { ctx -> dispatch(spec, ctx, readArgs(ctx, prevArgs), native) }
+        }
+    }
+
+    private fun readArgs(
+        ctx: CommandContext<CommandSourceStack>,
+        args: List<CommandArg>,
+    ): Map<String, Any?> {
+        val out = LinkedHashMap<String, Any?>()
+        for (a in args) out[a.name] = readArg(ctx, a)
+        return out
+    }
+
+    /**
+     * Attach the appropriate suggester to `node`. Priority:
+     *   1. Dynamic JS callback (`arg.suggesterId`) -- fires synchronously
+     *      against the V8 isolate on every tab keystroke.
+     *   2. Static snapshot (`arg.suggestions`) -- prefix-filtered list.
+     *   3. Brigadier's built-in (e.g. online players for `player` type).
+     */
+    private fun wireSuggestions(
+        node: RequiredArgumentBuilder<CommandSourceStack, *>,
+        arg: CommandArg,
+        native: NativeLoader,
+    ) {
+        if (arg.suggesterId != null) {
+            node.suggests(dynamicSuggester(arg.suggesterId, native))
+        } else if (arg.suggestions.isNotEmpty()) {
+            node.suggests(staticSuggester(arg.suggestions))
+        }
+    }
+
+    /**
      * Brigadier SuggestionProvider that returns a fixed list, filtered by
-     * the partial input the user has typed. Static-at-registration --
-     * full dynamic-per-keystroke suggesters need a synchronous Kotlin->JS
-     * call which is a follow-up.
+     * the partial input the user has typed.
      */
     private fun staticSuggester(items: List<String>): SuggestionProvider<CommandSourceStack> {
-        return SuggestionProvider { ctx, builder ->
+        return SuggestionProvider { _, builder ->
             val remaining = builder.remaining.lowercase()
             for (item in items) {
                 if (item.lowercase().startsWith(remaining)) {
@@ -140,6 +262,57 @@ class ScriptCommandRegistry(
             }
             builder.buildFuture()
         }
+    }
+
+    /**
+     * Dynamic JS-callback suggester. On every tab keystroke, calls the
+     * JS function the script registered (via `suggester: () => string[]`)
+     * synchronously against the V8 isolate via the existing proxy
+     * dispatch bridge, then prefix-filters whatever it returns.
+     *
+     * The JS function receives `(partialInput: string)`. Its callback is
+     * stored on the JS side in `proxyImpls` keyed by `suggesterId`; we
+     * invoke method name "suggest" through `invokeJsProxy` which routes
+     * to that table.
+     */
+    private fun dynamicSuggester(
+        suggesterId: Long,
+        native: NativeLoader,
+    ): SuggestionProvider<CommandSourceStack> {
+        return SuggestionProvider { _, builder ->
+            val remaining = builder.remaining
+            // JS handler receives the partial input as its only argument.
+            // CBOR top-level array of [input_string].
+            val argsCbor = encodeStringArray(listOf(remaining))
+            val resultBytes = try {
+                native.invokeJsProxy(suggesterId, "suggest", argsCbor)
+            } catch (e: Throwable) {
+                plugin.logger.warning(
+                    "dynamic suggester $suggesterId failed: ${e.javaClass.simpleName}: ${e.message}"
+                )
+                return@SuggestionProvider builder.buildFuture()
+            }
+            if (resultBytes.isNotEmpty()) {
+                val items = co.nstant.`in`.cbor.CborDecoder.decode(resultBytes)
+                val first = items.firstOrNull()
+                val list = (first as? co.nstant.`in`.cbor.model.Array)?.dataItems.orEmpty()
+                val lower = remaining.lowercase()
+                for (item in list) {
+                    val s = (item as? co.nstant.`in`.cbor.model.UnicodeString)?.string ?: continue
+                    if (s.lowercase().startsWith(lower)) builder.suggest(s)
+                }
+            }
+            builder.buildFuture()
+        }
+    }
+
+    /** Encode `items` as a top-level CBOR array of text strings. */
+    private fun encodeStringArray(items: List<String>): ByteArray {
+        val out = java.io.ByteArrayOutputStream()
+        val arr = co.nstant.`in`.cbor.model.Array()
+        for (s in items) arr.add(co.nstant.`in`.cbor.model.UnicodeString(s))
+        co.nstant.`in`.cbor.CborEncoder(out).encode(arr)
+        return out.toByteArray()
     }
 
     private fun buildArgumentNode(arg: CommandArg): RequiredArgumentBuilder<CommandSourceStack, *> {
@@ -247,10 +420,16 @@ class ScriptCommandRegistry(
                 "isPlayer" to (sender is Player),
             ),
             "args" to resolvedArgs.mapValues { (_, v) -> marshalArg(v) },
-            "label" to spec.name,
+            // Root command label is the first segment of the dotted path
+            // (e.g. "pex" for path "pex.user.add"). Leaf-specific routing
+            // lives in the event name, not `label`.
+            "label" to spec.path.substringBefore('.'),
         )
         val bytes = EventEncoder.encode(marshalled)
-        native.dispatchEvent("__rune_command:${spec.name}", bytes)
+        // `spec.path` is the dotted tree path (e.g. "pex.user.add").
+        // Leaf subcommands fire their own event so JS can route to a
+        // per-leaf handler without re-parsing the args list.
+        native.dispatchEvent("__rune_command:${spec.path}", bytes)
         return Command.SINGLE_SUCCESS
     }
 

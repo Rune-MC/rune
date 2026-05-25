@@ -70,6 +70,19 @@ class NativeLoader(libraryPath: Path, scriptsDir: Path) : AutoCloseable {
         "rune_register_query_callback",
         FunctionDescriptor.ofVoid(ValueLayout.ADDRESS, ValueLayout.ADDRESS)
     )
+    private val runeInvokeJsProxy: MethodHandle = downcall(
+        "rune_invoke_js_proxy",
+        FunctionDescriptor.of(
+            ValueLayout.JAVA_LONG,    // bytes written (or negative on error)
+            ValueLayout.ADDRESS,      // loader
+            ValueLayout.JAVA_LONG,    // proxy_id (u64; Kotlin Long is fine)
+            ValueLayout.ADDRESS,      // method_name (UTF-8, NUL-terminated)
+            ValueLayout.ADDRESS,      // args (CBOR bytes)
+            ValueLayout.JAVA_LONG,    // args_len
+            ValueLayout.ADDRESS,      // out
+            ValueLayout.JAVA_LONG,    // cap
+        )
+    )
 
     private val handle: MemorySegment = run {
         Arena.ofConfined().use { arena ->
@@ -166,6 +179,64 @@ class NativeLoader(libraryPath: Path, scriptsDir: Path) : AutoCloseable {
 
     fun reload(): Int = runeReload.invoke(handle) as Int
 
+    /**
+     * Synchronously invoke a JS-installed proxy method (Java -> JS).
+     *
+     * Used by [JsProxyDispatcher] when a ByteBuddy-generated proxy
+     * (e.g. a PAPI `PlaceholderExpansion` subclass) has one of its
+     * methods called by Java. The dispatcher hands us `(proxy_id,
+     * method, cbor_args)`; we forward through Panama into the Rust
+     * loader, which routes to the backend that owns the proxy and
+     * runs the JS handler inline against the V8 isolate (Locker'd
+     * for cross-thread safety).
+     *
+     * Returns the CBOR-encoded JS return value, or empty bytes when
+     * the call failed at the FFI level (logged + the caller falls
+     * back to its method's return-type default).
+     */
+    fun invokeJsProxy(proxyId: Long, methodName: String, args: ByteArray): ByteArray {
+        var capacity = INITIAL_PROXY_CAP
+        while (true) {
+            val result = Arena.ofConfined().use { arena ->
+                val nameSeg = arena.allocateFrom(methodName)
+                val argsSeg: MemorySegment = if (args.isEmpty()) {
+                    MemorySegment.NULL
+                } else {
+                    val seg = arena.allocate(args.size.toLong())
+                    MemorySegment.copy(args, 0, seg, ValueLayout.JAVA_BYTE, 0, args.size)
+                    seg
+                }
+                val argsLen: Long = args.size.toLong()
+                val out = arena.allocate(capacity)
+                val n = runeInvokeJsProxy.invoke(
+                    handle,
+                    proxyId,
+                    nameSeg,
+                    argsSeg,
+                    argsLen,
+                    out,
+                    capacity,
+                ) as Long
+                when {
+                    n >= 0 -> {
+                        val bytes = ByteArray(n.toInt())
+                        if (n > 0) {
+                            MemorySegment.copy(out, ValueLayout.JAVA_BYTE, 0, bytes, 0, n.toInt())
+                        }
+                        bytes  // success
+                    }
+                    n == -1L -> null  // sentinel: buffer too small, grow
+                    else -> ByteArray(0)  // -2 internal error; caller defaults
+                }
+            }
+            if (result != null) return result
+            capacity *= 2
+            require(capacity <= MAX_PROXY_CAP) {
+                "proxy invocation result exceeded $MAX_PROXY_CAP bytes"
+            }
+        }
+    }
+
     override fun close() {
         runeShutdown.invoke(handle)
         libArena.close()
@@ -174,6 +245,8 @@ class NativeLoader(libraryPath: Path, scriptsDir: Path) : AutoCloseable {
     companion object {
         private const val INITIAL_DRAIN_CAP = 4096L
         private const val MAX_DRAIN_CAP = 16L * 1024 * 1024
+        private const val INITIAL_PROXY_CAP = 4096L
+        private const val MAX_PROXY_CAP = 16L * 1024 * 1024
 
         /**
          * Sole live [QueryHandler]. The Panama upcall stub binds to the

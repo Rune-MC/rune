@@ -51,6 +51,7 @@ class QueryHandler(
                 "invoke_static" -> handleInvokeStatic(query)
                 "get_static_field" -> handleGetStaticField(query)
                 "construct" -> handleConstruct(query)
+                "create_proxy" -> handleCreateProxy(query)
                 else -> encodeError("unknown query type: $type")
             }
         } catch (e: Throwable) {
@@ -219,6 +220,50 @@ class QueryHandler(
         return encodeError(
             "no matching ${clazz.simpleName} constructor for given arg types"
         )
+    }
+
+    /**
+     * Handle a `rune.implement(className, methodNames)` request. We
+     * generate a subclass via [JsProxyFactory], register the instance in
+     * the [RefRegistry], and return a Bukkit ref snapshot with an extra
+     * `__runeProxyId` field so the JS dispatch table can key on it.
+     *
+     * The snapshot is hand-rolled (not via EventMarshaller) because the
+     * generated class lives in `net.bytebuddy.renamed.*` -- the
+     * marshaller's "is-API-class" heuristic would reject it and fall
+     * through to toString. We know our generated instances ARE refs;
+     * just emit the snapshot directly.
+     */
+    private fun handleCreateProxy(query: CborMap): ByteArray {
+        val className = (query[UnicodeString("class_name")] as? UnicodeString)?.string
+            ?: return encodeError("create_proxy missing 'class_name'")
+        val methodsArr = query[UnicodeString("methods")] as? CborArray
+            ?: return encodeError("create_proxy missing 'methods'")
+        val methodNames = methodsArr.dataItems
+            .mapNotNull { (it as? UnicodeString)?.string }
+            .toSet()
+
+        val parent = loadClass(className) ?: return encodeError("class not found: $className")
+
+        return try {
+            val proxy = JsProxyFactory.createProxy(parent, methodNames)
+            val refId = refRegistry.put(proxy.instance)
+            val snapshot: Map<String, Any?> = mapOf(
+                "type" to "ok",
+                "value" to mapOf(
+                    "__ref" to refId,
+                    "__class" to parent.simpleName,
+                    // u64 -> string so JS doesn't lose precision on >= 2^53
+                    // ids (we won't hit that in practice, but the wire is
+                    // already CBOR-string-friendly).
+                    "__runeProxyId" to proxy.proxyId.toString(),
+                ),
+            )
+            EventEncoder.encode(snapshot)
+        } catch (e: Throwable) {
+            val cause = e.cause ?: e
+            encodeError("create_proxy failed: ${cause.javaClass.simpleName}: ${cause.message ?: ""}")
+        }
     }
 
     private fun handleGetStaticField(query: CborMap): ByteArray {

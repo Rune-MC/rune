@@ -61,6 +61,15 @@ mod ffi {
             rn: *mut RuneNode,
             cb: super::QueryCallback,
         );
+        pub fn rune_node_invoke_js_proxy(
+            rn: *mut RuneNode,
+            proxy_id: u64,
+            method_name: *const c_char,
+            args: *const u8,
+            args_len: usize,
+            out: *mut u8,
+            cap: usize,
+        ) -> isize;
     }
 }
 
@@ -150,6 +159,25 @@ function _fmt(args) {
   return out;
 }
 
+// Legacy String setters that have a modern Component-typed sibling.
+// When the caller passes a Component to the legacy method, we transparently
+// reroute to the Component variant. IDEs commonly auto-suggest the legacy
+// `setX(String)` because it's the older signature; rerouting saves users
+// from "no matching X(1 arg(s))" errors when they wrap their text in
+// rune.mm(...) or otherwise hand over a Component.
+const _LEGACY_TO_COMPONENT_METHOD = {
+  setDisplayName: 'displayName',   // ItemMeta, Player
+  setCustomName: 'customName',     // Entity, Nameable
+  setPlayerListName: 'playerListName', // Player
+  setTitle: 'title',               // BossBar, Inventory titles, Book
+  setSubtitle: 'subtitle',
+  setAuthor: 'author',             // Book
+};
+
+function _looksLikeComponent(v) {
+  return v != null && typeof v === 'object' && v.__class === 'Component';
+}
+
 // Bukkit objects arrive from the host as plain objects with `__ref` and
 // `__class`. wrapRef returns a Proxy where unknown property reads become
 // methods that invoke through the sync query callback. Returns are revived
@@ -171,6 +199,14 @@ function wrapRef(snapshot) {
       }
       if (typeof prop !== 'string') return undefined;
       return function (...args) {
+        // Auto-route legacy String setters to Component setters when the
+        // caller hands over a Component. setDisplayName("text") still
+        // calls setDisplayName(String); setDisplayName(rune.mm("<gold>x"))
+        // reroutes to displayName(Component).
+        const componentMethod = _LEGACY_TO_COMPONENT_METHOD[prop];
+        if (componentMethod && args.length === 1 && _looksLikeComponent(args[0])) {
+          return reviveRefs(__rune_invoke(refId, componentMethod, args));
+        }
         return reviveRefs(__rune_invoke(refId, prop, args));
       };
     },
@@ -294,6 +330,10 @@ globalThis.rune = {
   entityType: staticFields('org.bukkit.entity.EntityType'),
   particle:   staticFields('org.bukkit.Particle'),
   sound:      staticFields('org.bukkit.Sound'),
+  // PersistentDataType singletons -- use as `rune.pdt.STRING`,
+  // `rune.pdt.INTEGER` etc. when calling
+  // `meta.getPersistentDataContainer().set(key, type, value)`.
+  pdt:        staticFields('org.bukkit.persistence.PersistentDataType'),
 
   callStatic(className, method, ...args) {
     return reviveRefs(__rune_invoke_static(className, method, args));
@@ -312,7 +352,119 @@ globalThis.rune = {
   },
   javaClass(className) { return staticClass(className); },
   javaEnum(className) { return staticFields(className); },
+
+  /**
+   * Implement (subclass) a Java abstract class or interface from JS.
+   *
+   *   const expansion = rune.implement(
+   *     'me.clip.placeholderapi.expansion.PlaceholderExpansion',
+   *     {
+   *       getIdentifier:  () => 'rune',
+   *       getAuthor:      () => 'rune-perms',
+   *       getVersion:     () => '1.0',
+   *       onRequest: (player, params) => {
+   *         if (params === 'prefix') return getPrefixFor(player);
+   *         return null;
+   *       },
+   *     },
+   *   );
+   *   papi.PlaceholderAPI.registerExpansion(expansion);
+   *
+   * Returns a Bukkit ref to the live proxy instance, which can be
+   * passed into any Java API that expects the parent class/interface.
+   *
+   * Each method named in `methods` is called synchronously by Java
+   * with `this` bound to the proxy ref and arguments wrapped the same
+   * way as event payloads (so `player.getName()` works directly).
+   * Abstract methods you do NOT supply will throw an
+   * UnsupportedOperationException at call-time -- log and skip on
+   * the JS side.
+   */
+  implement(className, methods) {
+    if (typeof className !== 'string') {
+      throw new TypeError('rune.implement(className, methods): className must be a string');
+    }
+    if (!methods || typeof methods !== 'object') {
+      throw new TypeError('rune.implement(className, methods): methods must be an object');
+    }
+    const methodNames = [];
+    const fnTable = Object.create(null);
+    for (const k of Object.keys(methods)) {
+      if (typeof methods[k] === 'function') {
+        methodNames.push(k);
+        fnTable[k] = methods[k];
+      }
+    }
+    if (methodNames.length === 0) {
+      throw new Error('rune.implement: at least one method implementation required');
+    }
+    const result = reviveRefs(__rune_create_proxy(className, methodNames));
+    if (!result || typeof result.__runeProxyId !== 'string') {
+      throw new Error(
+        `rune.implement(${className}): host returned no proxy id`,
+      );
+    }
+    // proxyId is a stringified u64 to survive JSON-ish marshalling; we
+    // keep it as a string for the Map key (JS numbers can't safely hold
+    // values >= 2^53, though our generator stays under that in practice).
+    proxyImpls.set(result.__runeProxyId, { className, methods: fnTable });
+    return result;
+  },
 };
+
+// Java -> JS proxy dispatch. Called by the C++ shim's
+// `rune_node_invoke_js_proxy` whenever a Java method on a Rune-generated
+// proxy fires. `proxyId` arrives as a BigInt (so 64-bit IDs round-trip
+// losslessly); we stringify for the Map lookup.
+const proxyImpls = new Map();
+
+// Sentinel returned to Kotlin when a proxy id isn't in the current
+// isolate's table -- usually because /rune reload tore the isolate
+// down but a Java plugin (e.g. PAPI) is still holding the old proxy
+// instance. Kotlin recognises this and falls back to its argless-
+// getter cache (so e.g. stale getIdentifier() can still return "rune"
+// long enough for PAPI to find + unregister the old entry).
+const STALE_SENTINEL = { __rune_stale: true };
+
+globalThis.__rune_proxy_dispatch = function (proxyId, methodName, args) {
+  const key = String(proxyId);
+  const impl = proxyImpls.get(key);
+  if (!impl) {
+    // Stale -- DON'T log here; the noise floods on every /papi reload
+    // tick. Kotlin handles + caches.
+    return STALE_SENTINEL;
+  }
+  const fn = impl.methods[methodName];
+  if (typeof fn !== 'function') {
+    __rune_log_warn(
+      `proxy dispatch: ${impl.className}.${methodName} not implemented`,
+    );
+    return null;
+  }
+  // Revive wrapped Bukkit refs in the argument array so handlers can
+  // call methods directly (e.g. `player.getName()`).
+  const revived = Array.isArray(args)
+    ? args.map(reviveRefs)
+    : [];
+  try {
+    return fn.apply(null, revived);
+  } catch (e) {
+    __rune_log_error(
+      `proxy ${impl.className}.${methodName} threw: ` + (e && e.stack || e),
+    );
+    return null;
+  }
+};
+
+// Wire the dispatcher into the C++ shim. Done AFTER `rune.implement` is
+// in place so the FFI handle and the JS table are always installed in
+// the same step. If this throws (e.g. fn isn't a function), the rest of
+// the bootstrap still runs -- proxy use just fails later.
+try {
+  __rune_install_proxy_dispatch(__rune_proxy_dispatch);
+} catch (e) {
+  __rune_log_error('proxy dispatcher install failed: ' + (e && e.stack || e));
+}
 
 // ---------------------------------------------------------------------------
 // Scheduling helpers. Our Node uv loop ticks on the Paper main thread
@@ -377,6 +529,425 @@ globalThis.rune.location = function (world, x, y, z, yaw, pitch) {
     return new bukkit.Location(world, x, y, z);
   }
   return new bukkit.Location(world, x, y, z, yaw ?? 0, pitch ?? 0);
+};
+
+// ---------------------------------------------------------------------------
+// Message helpers -- MiniMessage parse + send / title / actionBar.
+//
+// All accept MiniMessage syntax (`<gold>`, `<gradient:red:blue>`, etc.).
+// `rune.msg` takes any Audience (player, world, command sender, server...)
+// OR an array of audiences. `rune.mm` is the bare parser when you need
+// the Component for chaining (e.g. `Component.text("X").append(rune.mm(...))`).
+// ---------------------------------------------------------------------------
+
+globalThis.rune.mm = function (template) {
+  return mm.MiniMessage.miniMessage().deserialize(String(template ?? ''));
+};
+
+globalThis.rune.msg = function (audience, template) {
+  const comp = rune.mm(template);
+  if (Array.isArray(audience)) {
+    for (const a of audience) a.sendMessage(comp);
+  } else {
+    audience.sendMessage(comp);
+  }
+};
+
+/**
+ * Show a title to `player`. All times are in ms; defaults match vanilla
+ * (500/3000/500). `subtitle` may be omitted.
+ *
+ *   rune.title(player, "<red><bold>BOSS FIGHT");
+ *   rune.title(player, "Welcome", "<gray>...to the server", { stayMs: 5000 });
+ */
+globalThis.rune.title = function (player, title, subtitle, opts) {
+  const Title = kyori.adventure.title.Title;
+  const Duration = java.time.Duration;
+  const titleComp = rune.mm(title ?? '');
+  const subComp = rune.mm(subtitle ?? '');
+  const fadeIn = Duration.ofMillis(opts?.fadeInMs ?? 500);
+  const stay = Duration.ofMillis(opts?.stayMs ?? 3000);
+  const fadeOut = Duration.ofMillis(opts?.fadeOutMs ?? 500);
+  const times = Title.Times.times(fadeIn, stay, fadeOut);
+  player.showTitle(Title.title(titleComp, subComp, times));
+};
+
+globalThis.rune.actionBar = function (player, template) {
+  player.sendActionBar(rune.mm(template));
+};
+
+// ---------------------------------------------------------------------------
+// Item builder -- fluent extension of rune.itemstack.
+//
+//   const sword = rune.item(bukkit.Material.DIAMOND_SWORD)
+//     .name("<gold>Excalibur")
+//     .lore(["<gray>Wielded by kings", "<dark_gray>+10 damage"])
+//     .enchant("sharpness", 5)
+//     .unbreakable()
+//     .glow()
+//     .build();
+//
+// Enchant ids are minecraft-namespaced names (sharpness, mending,
+// unbreaking, ...). Item flags ("HIDE_ENCHANTS", "HIDE_ATTRIBUTES", ...)
+// hide the matching tooltip lines.
+// ---------------------------------------------------------------------------
+
+globalThis.rune.item = function (material) {
+  const state = {
+    count: 1,
+    name: null,
+    lore: null,
+    enchants: [],
+    unbreakable: false,
+    customModelData: null,
+    flags: [],
+    pdc: [],
+    skullOwner: null,
+  };
+  const builder = {
+    amount(n)            { state.count = n | 0; return builder; },
+    name(s)              { state.name = String(s); return builder; },
+    lore(lines)          { state.lore = lines.map(String); return builder; },
+    enchant(id, level)   { state.enchants.push({ id, level: level ?? 1 }); return builder; },
+    unbreakable()        { state.unbreakable = true; return builder; },
+    /** Cosmetic: adds a hidden enchant so the item shimmers. */
+    glow() {
+      state.enchants.push({ id: 'unbreaking', level: 1 });
+      if (!state.flags.includes('HIDE_ENCHANTS')) state.flags.push('HIDE_ENCHANTS');
+      return builder;
+    },
+    customModelData(n)   { state.customModelData = n | 0; return builder; },
+    flag(name)           { state.flags.push(String(name)); return builder; },
+    /**
+     * Set a PersistentDataContainer entry.
+     *
+     *   .data("origin", "trial_chamber")           // STRING (auto)
+     *   .data("level", 7)                          // INTEGER (auto)
+     *   .data("weight", 3.5)                       // DOUBLE (auto)
+     *   .data("magic", true)                       // BYTE 0/1 (auto)
+     *   .data("count", 100n, rune.pdt.LONG)        // explicit type
+     *   .data("config", JSON.stringify({hp: 100}))  // arbitrary structured -> STRING
+     *
+     * `key` is namespaced via `rune.key(...)` -- bare names land under
+     * `rune:` (so `.data("foo")` -> `rune:foo`). Use `"plugin:foo"` to
+     * place under another namespace.
+     */
+    data(key, value, type) {
+      state.pdc.push({ key, value, type });
+      return builder;
+    },
+    /**
+     * Set the skull owner on a PLAYER_HEAD item. Accepts a Player /
+     * OfflinePlayer ref, a UUID string, or a player name. Non-skull
+     * materials silently ignore this. Texture resolution is best-effort:
+     * it'll display the player's current skin if the server has it
+     * cached, otherwise the default Steve head until Mojang responds.
+     */
+    skullOwner(target) {
+      state.skullOwner = target;
+      return builder;
+    },
+    build() {
+      return rune.itemstack(material, state.count, (meta) => {
+        if (state.name) meta.displayName(rune.mm(state.name));
+        if (state.lore && state.lore.length) {
+          // `meta.lore(List<Component>)` -- pass a JS array; the host-side
+          // ArgCoercer converts it to a java.util.List. Earlier versions
+          // tried `new java.util.ArrayList()`, but CBOR marshals every
+          // Java Collection back as a JS array (no __ref / .add() once it
+          // crosses the boundary), so the builder approach can't work.
+          meta.lore(state.lore.map((line) => rune.mm(line)));
+        }
+        for (const { id, level } of state.enchants) {
+          // Enchantment.getByKey(key) is the canonical lookup. Custom
+          // (datapack) enchants land under their own namespace; default
+          // to "minecraft" if the user omits one.
+          const key = String(id).includes(':') ? String(id) : 'minecraft:' + id;
+          const ench = rune.callStatic(
+            'org.bukkit.enchantments.Enchantment',
+            'getByKey',
+            rune.key(key),
+          );
+          if (ench) meta.addEnchant(ench, level, /*ignoreLevelRestriction*/ true);
+        }
+        if (state.unbreakable) meta.setUnbreakable(true);
+        if (state.customModelData != null) meta.setCustomModelData(state.customModelData);
+        if (state.flags.length > 0) {
+          // ItemMeta.addItemFlags(ItemFlag...) -- reflection sees the
+          // signature as ItemFlag[], so build a Java array of the right
+          // component type rather than passing a single value (which
+          // would fail "no matching addItemFlags(1 arg(s))").
+          const ItemFlagClass = java.lang.Class.forName('org.bukkit.inventory.ItemFlag');
+          const resolved = state.flags
+            .map((flag) => rune.getStatic('org.bukkit.inventory.ItemFlag', flag))
+            .filter((f) => f != null);
+          if (resolved.length > 0) {
+            const arr = java.lang.reflect.Array.newInstance(
+              ItemFlagClass,
+              resolved.length,
+            );
+            for (let i = 0; i < resolved.length; i++) {
+              java.lang.reflect.Array.set(arr, i, resolved[i]);
+            }
+            meta.addItemFlags(arr);
+          }
+        }
+        if (state.skullOwner != null) {
+          // SkullMeta extends ItemMeta -- if the material isn't a head,
+          // setOwningPlayer just isn't on the meta and we skip silently.
+          // Resolve every input shape (Player, OfflinePlayer, UUID, name)
+          // to an OfflinePlayer so the texture path is identical.
+          try {
+            if (typeof meta.setOwningPlayer === 'function') {
+              const target = state.skullOwner;
+              let offline = null;
+              if (target && typeof target === 'object'
+                  && typeof target.getUniqueId === 'function') {
+                // Player / OfflinePlayer ref -- if it's already an
+                // OfflinePlayer use it directly, else look it up by uuid.
+                offline = (typeof target.hasPlayedBefore === 'function')
+                  ? target
+                  : rune.bukkit.getOfflinePlayer(target.getUniqueId());
+              } else if (typeof target === 'string') {
+                // UUID-shaped strings -> lookup by UUID, names -> by name.
+                const uuidLike = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(target);
+                offline = uuidLike
+                  ? rune.bukkit.getOfflinePlayer(java.util.UUID.fromString(target))
+                  : rune.bukkit.getOfflinePlayer(target);
+              }
+              if (offline) meta.setOwningPlayer(offline);
+            }
+          } catch (e) {
+            __rune_log_warn('rune.item.skullOwner failed: ' + (e && e.message || e));
+          }
+        }
+        if (state.pdc.length > 0) {
+          const pdc = meta.getPersistentDataContainer();
+          for (const { key, value, type } of state.pdc) {
+            const namespacedKey = rune.key(String(key));
+            const pdType = type ?? _autoPdType(value);
+            if (!pdType) {
+              __rune_log_warn(
+                `rune.item.data(${key}): cannot auto-derive PersistentDataType for ` +
+                  `value of type ${typeof value} -- pass an explicit type ` +
+                  `(e.g. rune.pdt.STRING).`,
+              );
+              continue;
+            }
+            // Coerce JS-side so the Java-side method-resolver finds the
+            // best overload of pdc.set(key, type, T).
+            pdc.set(namespacedKey, pdType, _coerceForPdType(value, type));
+          }
+        }
+      });
+    },
+  };
+  return builder;
+};
+
+/**
+ * Pick a sensible PersistentDataType for a bare JS value. Conservative:
+ *   string  -> STRING
+ *   integer -> INTEGER (use rune.pdt.LONG explicitly for >= 2^31)
+ *   float   -> DOUBLE
+ *   boolean -> BOOLEAN  (Paper-only; falls back to BYTE if absent)
+ *   bigint  -> LONG
+ * For anything else (objects, arrays), pass an explicit `type` and
+ * pre-serialise.
+ */
+function _autoPdType(value) {
+  switch (typeof value) {
+    case 'string':  return rune.pdt.STRING;
+    case 'bigint':  return rune.pdt.LONG;
+    case 'boolean': return rune.pdt.BOOLEAN ?? rune.pdt.BYTE;
+    case 'number':
+      return Number.isInteger(value) ? rune.pdt.INTEGER : rune.pdt.DOUBLE;
+    default:        return null;
+  }
+}
+
+function _coerceForPdType(value, _type) {
+  if (typeof value === 'boolean') return value;  // Paper BOOLEAN takes boolean
+  return value;
+}
+
+// ---------------------------------------------------------------------------
+// Entity spawn helper.
+//
+//   rune.spawn(player.getLocation(), "zombie", (zombie) => {
+//     zombie.setCustomName("Boss");
+//     zombie.setCustomNameVisible(true);
+//   });
+//
+// `typeName` is matched case-insensitively against EntityType constants.
+// Returns the spawned Entity ref.
+// ---------------------------------------------------------------------------
+
+globalThis.rune.spawn = function (location, typeName, configure) {
+  const type = rune.getStatic(
+    'org.bukkit.entity.EntityType',
+    String(typeName).toUpperCase(),
+  );
+  if (!type) {
+    throw new Error(`rune.spawn: unknown entity type '${typeName}'`);
+  }
+  const world = typeof location.getWorld === 'function'
+    ? location.getWorld()
+    : rune.bukkit.getWorld(location.world);
+  const entity = world.spawnEntity(location, type);
+  if (typeof configure === 'function') {
+    try { configure(entity); }
+    catch (e) {
+      __rune_log_error('rune.spawn configure threw: ' + (e && e.stack || e));
+    }
+  }
+  return entity;
+};
+
+// ---------------------------------------------------------------------------
+// GUI factory -- chest inventory with per-slot click handlers.
+//
+//   const gui = rune.gui({ title: "<gold>Shop", rows: 3 }, (g) => {
+//     g.border(rune.item(bukkit.Material.BLACK_STAINED_GLASS_PANE).name(" ").build());
+//     g.slot(13, rune.item(bukkit.Material.DIAMOND).name("Buy").build(), (e) => {
+//       e.getWhoClicked().sendMessage("Purchased!");
+//       e.getWhoClicked().closeInventory();
+//     });
+//     g.onClose((e) => console.info(e.getPlayer().getName() + " closed shop"));
+//   });
+//   gui.open(player);
+//
+// All clicks inside the GUI are auto-cancelled (so the player can't take
+// the display items). The first GUI registration wires the global
+// InventoryClickEvent / InventoryCloseEvent listeners exactly once.
+// ---------------------------------------------------------------------------
+
+const _activeGuis = new Map(); // inventory __ref -> {slots, size, onClose}
+let _guiEventsWired = false;
+
+function _ensureGuiEvents() {
+  if (_guiEventsWired) return;
+  _guiEventsWired = true;
+  rune.on('InventoryClickEvent', (e) => {
+    const inv = e.getInventory();
+    const refId = inv?.__ref;
+    if (refId == null) return;
+    const cfg = _activeGuis.get(refId);
+    if (!cfg) return;
+    // Cancel UNCONDITIONALLY while a Rune GUI is being viewed. Covers:
+    //   * clicks on a display item in the top inventory
+    //   * shift-clicks from the player's bottom inventory that would
+    //     drop the item INTO the top (the click event lives in the
+    //     bottom slot but the effect is in the top -- need to cancel
+    //     before Bukkit applies the move)
+    //   * number-key swaps, hotbar swaps, double-click collects
+    // The per-slot onClick handler decides what to do AFTER cancel;
+    // callers don't need to call setCancelled themselves.
+    e.setCancelled(true);
+    const slot = e.getRawSlot();
+    if (slot < 0 || slot >= cfg.size) return; // click was in the player's own inventory
+    const entry = cfg.slots.get(slot);
+    if (entry && typeof entry.onClick === 'function') {
+      try { entry.onClick(e); }
+      catch (err) { __rune_log_error('GUI click handler threw: ' + (err && err.stack || err)); }
+    }
+  });
+  rune.on('InventoryCloseEvent', (e) => {
+    const inv = e.getInventory();
+    const refId = inv?.__ref;
+    if (refId == null) return;
+    const cfg = _activeGuis.get(refId);
+    if (!cfg) return;
+    if (typeof cfg.onClose === 'function') {
+      try { cfg.onClose(e); }
+      catch (err) { __rune_log_error('GUI close handler threw: ' + (err && err.stack || err)); }
+    }
+    _activeGuis.delete(refId);
+  });
+}
+
+globalThis.rune.gui = function (spec, init) {
+  _ensureGuiEvents();
+  const rows = Math.max(1, Math.min(6, (spec.rows | 0) || 3));
+  const size = rows * 9;
+  const titleComp = spec.title ? rune.mm(spec.title) : Component.text('');
+  const inv = rune.bukkit.createInventory(null, size, titleComp);
+
+  const slots = new Map();
+  let onCloseHandler = null;
+
+  const guiOwn = {
+    /** Place an item at `slot`. Optional `onClick(e)` fires on click. */
+    slot(idx, item, onClick) {
+      slots.set(idx, { item, onClick });
+      inv.setItem(idx, item);
+      return gui;
+    },
+    /** Fill empty slots with `item`. Pre-set slots stay put. */
+    fill(item, onClick) {
+      for (let i = 0; i < size; i++) {
+        if (!slots.has(i)) {
+          slots.set(i, { item, onClick });
+          inv.setItem(i, item);
+        }
+      }
+      return gui;
+    },
+    /** Decorative border (top + bottom rows + first + last column). */
+    border(item, onClick) {
+      const rowsCount = size / 9;
+      for (let r = 0; r < rowsCount; r++) {
+        for (let c = 0; c < 9; c++) {
+          if (r === 0 || r === rowsCount - 1 || c === 0 || c === 8) {
+            const i = r * 9 + c;
+            slots.set(i, { item, onClick });
+            inv.setItem(i, item);
+          }
+        }
+      }
+      return gui;
+    },
+    onClose(fn) { onCloseHandler = fn; return gui; },
+    open(player) {
+      _activeGuis.set(inv.__ref, { slots, size, onClose: onCloseHandler });
+      player.openInventory(inv);
+      return gui;
+    },
+    /** Live Inventory ref -- escape hatch for direct Bukkit calls. */
+    inventory: inv,
+  };
+
+  // Wrap so unknown reads forward to the underlying Inventory ref. Lets
+  // scripts treat the gui as if it WERE the Inventory:
+  //   event.getInventory().equals(gui)      // <- works
+  //   gui.getSize()                          // <- works (delegates to inv.getSize())
+  //   if (event.getClickedInventory()?.__ref === gui.__ref) { ... }
+  // The CBOR encoder uses ownKeys + getOwnPropertyDescriptor when handing
+  // values to Java, so we proxy those too -- otherwise passing `gui` into
+  // a Java method would marshal only the builder methods (slot/fill/...)
+  // and Java's ArgCoercer would fail to recognise it as an Inventory.
+  const gui = new Proxy(guiOwn, {
+    get(target, prop) {
+      if (prop in target) return target[prop];
+      return inv[prop];
+    },
+    has(target, prop) {
+      return prop in target || prop in inv;
+    },
+    ownKeys(target) {
+      return [...new Set([
+        ...Reflect.ownKeys(target),
+        ...Reflect.ownKeys(inv),
+      ])];
+    },
+    getOwnPropertyDescriptor(target, prop) {
+      return Reflect.getOwnPropertyDescriptor(target, prop)
+        ?? Reflect.getOwnPropertyDescriptor(inv, prop);
+    },
+  });
+
+  if (typeof init === 'function') init(gui);
+  return gui;
 };
 
 // ---------------------------------------------------------------------------
@@ -493,27 +1064,49 @@ globalThis.Listener = function Listener(target, _context) {
 
 const commandHandlers = new Map();
 
+// JS-side counter for dynamic-suggester ids. Suggesters are stored in
+// `proxyImpls` alongside rune.implement proxies; we use a high range to
+// avoid colliding with Kotlin-allocated proxy ids (those start at 1 and
+// will never realistically reach 2^32).
+let _suggesterIdNext = 4_294_967_296; // 2^32
+
 function _runeRegister(spec, handler) {
   if (!spec.name || typeof spec.name !== 'string') {
     throw new Error('command spec missing `name`');
   }
-  if (typeof handler !== 'function') {
-    throw new Error(`command "${spec.name}" missing handler (use .executes / @Run)`);
+  // For the top-level (root) call, handler is the root spec's executor;
+  // legal to be undefined when the root only branches into subcommands.
+  // Walk the tree and register one handler per leaf that has an
+  // executor.
+  const wire = _runeWalkSpec(spec, handler, /*parentPath=*/ '');
+  __rune_register_command(wire);
+}
+
+/**
+ * Recursively translate a (possibly nested) JS spec into the wire
+ * format the Kotlin plugin expects. Side effects per node:
+ *   * if `run` is provided, register it in `commandHandlers` under
+ *     the dotted path
+ *   * if any arg has `suggester`, allocate a suggester id and store
+ *     the callback in `proxyImpls` so the Kotlin SuggestionProvider
+ *     can call back through the proxy bridge
+ *   * subscribe to `__rune_command:<path>` exactly once per path
+ */
+function _runeWalkSpec(spec, runOverride, parentPath) {
+  const path = parentPath ? `${parentPath}.${spec.name}` : spec.name;
+  const handler = runOverride ?? spec.run;
+  const hasExecutor = typeof handler === 'function';
+  if (hasExecutor) {
+    commandHandlers.set(path, handler);
+    const eventName = '__rune_command:' + path;
+    if (!handlers.has(eventName)) {
+      handlers.set(eventName, [_runeDispatchCommand.bind(null, path)]);
+      __rune_subscribe_event(eventName);
+    }
   }
-  commandHandlers.set(spec.name, handler);
-  // Ensure the dispatch fan-out is wired before the host gets a chance to
-  // fire the event.
-  const eventName = '__rune_command:' + spec.name;
-  if (!handlers.has(eventName)) {
-    handlers.set(eventName, [_runeDispatchCommand.bind(null, spec.name)]);
-    __rune_subscribe_event(eventName);
-  }
-  __rune_register_command({
-    name: spec.name,
-    description: spec.description || '',
-    permission: spec.permission ?? null,
-    aliases: spec.aliases || [],
-    args: (spec.args || []).map((a) => ({
+  const argsOut = (spec.args || []).map((a) => {
+    const resolved = _resolveSuggest(a.suggest);
+    return {
       name: String(a.name),
       description: String(a.description || ''),
       type: String(a.type || 'string'),
@@ -521,26 +1114,68 @@ function _runeRegister(spec, handler) {
       max: a.max ?? null,
       greedy: !!a.greedy,
       optional: !!a.optional,
-      // Snapshot suggest at registration time. `suggest` accepts
-      // a string[] OR a function returning one. Dynamic-per-keystroke
-      // suggesters need a sync Kotlin->JS callback (follow-up).
-      suggestions: _resolveSuggest(a.suggest),
-    })),
+      suggestions: resolved.list,
+      suggester_id: resolved.suggesterId,
+      // Per-arg subcommands: literals that come AFTER this arg slot.
+      // Path is parent-spec's path (NOT including this arg's name,
+      // since args don't add path segments -- only literals do).
+      subcommands: (a.subcommands || []).map(
+        (sub) => _runeWalkSpec(sub, undefined, path),
+      ),
+    };
   });
+  return {
+    name: spec.name,
+    description: spec.description || '',
+    permission: spec.permission ?? null,
+    aliases: spec.aliases || [],
+    args: argsOut,
+    has_executor: hasExecutor,
+    subcommands: (spec.subcommands || []).map(
+      (sub) => _runeWalkSpec(sub, undefined, path),
+    ),
+  };
 }
 
+/**
+ * Resolve a `suggest` field into either:
+ *   * `{ list: [...], suggesterId: null }` -- static snapshot
+ *   * `{ list: [], suggesterId: <Number> }` -- dynamic callback
+ *
+ * The callback path registers the fn in `proxyImpls` so the Kotlin
+ * SuggestionProvider can call back via the existing proxy bridge.
+ * The JS dispatcher (`__rune_proxy_dispatch`) routes method
+ * "suggest" against the stored function.
+ */
 function _resolveSuggest(suggest) {
-  if (suggest == null) return [];
-  if (Array.isArray(suggest)) return suggest.map(String);
-  if (typeof suggest === 'function') {
-    try {
-      const out = suggest();
-      if (Array.isArray(out)) return out.map(String);
-    } catch (e) {
-      __rune_log_error('@Arg suggest() threw: ' + (e && e.stack || e));
-    }
+  if (suggest == null) return { list: [], suggesterId: null };
+  if (Array.isArray(suggest)) {
+    return { list: suggest.map(String), suggesterId: null };
   }
-  return [];
+  if (typeof suggest === 'function') {
+    const id = _suggesterIdNext++;
+    // Wrap the fn so the bridge sees a "suggest" method on a synthetic
+    // proxy. JS receives [partialInput] as args; user fn can take 0 or
+    // 1 args.
+    proxyImpls.set(String(id), {
+      className: 'RuneSuggester',
+      methods: {
+        suggest(input) {
+          try {
+            const out = suggest(String(input ?? ''));
+            return Array.isArray(out) ? out.map(String) : [];
+          } catch (e) {
+            __rune_log_error(
+              'dynamic suggester threw: ' + (e && e.stack || e),
+            );
+            return [];
+          }
+        },
+      },
+    });
+    return { list: [], suggesterId: id };
+  }
+  return { list: [], suggesterId: null };
 }
 
 async function _runeDispatchCommand(name, payload) {
@@ -665,46 +1300,203 @@ globalThis.Run = function Run(method, context) {
   return method;
 };
 
-globalThis.Command = function Command(name, opts) {
+// Per-root accumulator for decorator-style subcommand trees. Each
+// `@Command("pex user add")` decorated class adds a leaf to this Map,
+// then we rebuild + re-emit the full root spec via `_runeRegister`.
+// The Kotlin queue accepts updates pre-Brigadier-registration.
+const _commandLeaves = new Map(); // rootName -> LeafMeta[]
+const _commandRootOpts = new Map(); // rootName -> { description, permission, aliases }
+
+globalThis.Command = function Command(pathOrName, opts) {
+  // Space-separated path syntax: `@Command("pex user add")`. Leaf is the
+  // last segment, ancestors form the tree above it. Single-word names
+  // (the legacy form) just become a 1-segment leaf at the root.
+  const segments = String(pathOrName).split(/\s+/).filter(Boolean);
+  if (segments.length === 0) {
+    throw new Error('@Command(""): name required');
+  }
+  const root = segments[0];
+
   return function (target, _context) {
-    // Probe the class to trigger @Arg / @Run initializers, then
-    // discard the instance.
     let probe;
     try {
       probe = new target();
     } catch (e) {
       __rune_log_error(
-        `@Command ${name}: class needs a no-arg constructor (got: ` +
+        `@Command ${pathOrName}: class needs a no-arg constructor (got: ` +
           (e && e.message || e) + ')',
       );
       return target;
     }
     const argList = probe[_ARG_META] || [];
     const runProp = probe[_RUN_META];
-    if (!runProp) {
-      throw new Error(`@Command ${name}: missing @Run method on the class`);
+
+    // Root-level opts (description/permission/aliases) on the FIRST
+    // decoration of a root command win -- repeats are ignored. Place
+    // them on the @Command for the root path (e.g. @Command("pex"))
+    // for clarity.
+    if (segments.length === 1 && opts && !_commandRootOpts.has(root)) {
+      _commandRootOpts.set(root, opts);
     }
 
-    _runeRegister(
-      {
-        name,
-        description: opts?.description,
-        permission: opts?.permission,
-        aliases: opts?.aliases,
-        args: argList,
-      },
-      function (ctx) {
-        // Fresh instance per invocation so handler state stays isolated.
-        const inst = new target();
-        for (const m of argList) {
-          inst[m.propName] = ctx.args[m.name];
-        }
-        return inst[runProp](ctx);
-      },
-    );
+    const meta = {
+      path: segments,
+      args: argList,
+      runProp,
+      target,
+      opts,
+    };
+    const list = _commandLeaves.get(root) || [];
+    list.push(meta);
+    _commandLeaves.set(root, list);
+
+    // Rebuild + re-emit the full tree for this root command. Cheap --
+    // bounded by total leaf count for the root.
+    try {
+      _rebuildCommandTree(root);
+    } catch (e) {
+      __rune_log_error(
+        `_rebuildCommandTree(${root}) threw: ` + (e && e.stack || e),
+      );
+    }
     return target;
   };
 };
+
+/**
+ * Walk all leaves for `root`, dedupe shared args across siblings, and
+ * emit one tree spec via `rune.command(...)`. The Kotlin queue replaces
+ * the prior spec for `root` (pre-Brigadier) so each `@Command` decoration
+ * effectively merges into the same tree.
+ *
+ * Arg placement rules:
+ *   * Parent-shared args (matched by name) sit at the parent's literal
+ *     level. The deepest shared arg holds any executor + further-arg
+ *     children.
+ *   * Children whose arg lists DON'T share with the parent attach as
+ *     siblings of the parent's arg chain (no-arg-prefix literals like
+ *     `/pex group list`).
+ *   * Children with MORE args than the parent attach as arg.subcommands
+ *     of the parent's deepest shared arg.
+ */
+function _rebuildCommandTree(root) {
+  const leaves = _commandLeaves.get(root) || [];
+
+  // Build a literal-only tree first: each path segment becomes a node,
+  // with the leaf metadata stashed at the matching node.
+  const treeRoot = { name: root, children: new Map(), leaf: null };
+  for (const m of leaves) {
+    let node = treeRoot;
+    for (let i = 1; i < m.path.length; i++) {
+      const seg = m.path[i];
+      let child = node.children.get(seg);
+      if (!child) {
+        child = { name: seg, children: new Map(), leaf: null };
+        node.children.set(seg, child);
+      }
+      node = child;
+    }
+    node.leaf = m;
+  }
+
+  const rootOpts = _commandRootOpts.get(root) || {};
+  const spec = _emitTreeSpec(treeRoot, /*parentArgs=*/ [], rootOpts);
+  // Re-emit via the imperative path. _runeRegister (and the Kotlin
+  // queue) handles re-registration by replacing the prior spec.
+  _runeRegister(spec, spec.run);
+}
+
+function _emitTreeSpec(node, parentArgs, rootOpts) {
+  // Args declared by this node's leaf (if any). Strip any prefix already
+  // declared by ancestors (matched by name) so we don't re-emit them
+  // mid-chain.
+  const leafArgs = node.leaf?.args || [];
+  const ownArgs = [];
+  for (let i = 0; i < leafArgs.length; i++) {
+    const matchesParent =
+      i < parentArgs.length && parentArgs[i].name === leafArgs[i].name;
+    if (!matchesParent) {
+      ownArgs.push(...leafArgs.slice(i));
+      break;
+    }
+  }
+
+  const allArgs = parentArgs.concat(ownArgs);
+  // Children partition by whether their leaves SHARE the full allArgs
+  // chain as a prefix. Those that do attach AFTER allArgs (as
+  // arg.subcommands of the deepest); those that don't are siblings
+  // (spec.subcommands of THIS node).
+  const childList = [...node.children.values()];
+  const afterArgs = [];
+  const siblings = [];
+  for (const c of childList) {
+    if (_childHasArgPrefix(c, allArgs)) {
+      afterArgs.push(c);
+    } else {
+      siblings.push(c);
+    }
+  }
+
+  const spec = {
+    name: node.name,
+    description: node.leaf?.opts?.description ?? rootOpts.description ?? '',
+    permission: node.leaf?.opts?.permission ?? rootOpts.permission ?? null,
+    aliases: node.leaf?.opts?.aliases ?? rootOpts.aliases ?? [],
+    args: ownArgs.map((a, i) => {
+      const isLast = i === ownArgs.length - 1;
+      return {
+        name: a.name,
+        description: a.description,
+        type: a.type,
+        min: a.min,
+        max: a.max,
+        greedy: a.greedy,
+        optional: a.optional,
+        suggest: a.suggest,
+        // Attach after-args subcommands to the deepest own arg.
+        subcommands: isLast
+          ? afterArgs.map((c) => _emitTreeSpec(c, allArgs, rootOpts))
+          : [],
+      };
+    }),
+    subcommands: siblings.map((c) => _emitTreeSpec(c, parentArgs, rootOpts)),
+  };
+
+  // If there are no own args, the after-arg children attach as
+  // sibling-style subcommands instead (no arg to nest under).
+  if (ownArgs.length === 0 && afterArgs.length > 0) {
+    spec.subcommands = spec.subcommands.concat(
+      afterArgs.map((c) => _emitTreeSpec(c, parentArgs, rootOpts)),
+    );
+  }
+
+  // Bind the run handler if this node has a leaf with @Run.
+  if (node.leaf && node.leaf.runProp) {
+    const leaf = node.leaf;
+    spec.run = function (ctx) {
+      const inst = new leaf.target();
+      for (const m of leaf.args) inst[m.propName] = ctx.args[m.name];
+      return inst[leaf.runProp](ctx);
+    };
+  }
+  return spec;
+}
+
+function _childHasArgPrefix(child, prefixArgs) {
+  // Walk the child subtree DFS until we find any leaf; check its args.
+  if (child.leaf) {
+    const a = child.leaf.args;
+    if (a.length < prefixArgs.length) return false;
+    for (let i = 0; i < prefixArgs.length; i++) {
+      if (a[i].name !== prefixArgs[i].name) return false;
+    }
+    return true;
+  }
+  for (const sub of child.children.values()) {
+    if (_childHasArgPrefix(sub, prefixArgs)) return true;
+  }
+  return false;
+}
 
 // Top-level package proxies. Anything reachable on the Paper classpath is
 // reachable from JS without explicit setup. Examples:
@@ -806,6 +1598,10 @@ globalThis.console = {
 
 // Catch libraries that write directly to process.std{out,err}. process is
 // a Node built-in so it already exists; we just override .write.
+// Also rebase process.cwd() to the scripts root so libraries that
+// resolve paths from cwd (mongoose config loaders, dotenv, ...) land in
+// a script-friendly place instead of the Minecraft server root (which
+// is wherever the Paper JVM happened to start).
 try {
   if (globalThis.process && globalThis.process.stdout) {
     globalThis.process.stdout.write = (s) => { __rune_log_info(String(s).replace(/\n$/, '')); return true; };
@@ -813,7 +1609,26 @@ try {
   if (globalThis.process && globalThis.process.stderr) {
     globalThis.process.stderr.write = (s) => { __rune_log_error(String(s).replace(/\n$/, '')); return true; };
   }
-} catch (_) {}
+  if (globalThis.process) {
+    const _pathMod = require('node:path');
+    // runtimeDir is plugins/Rune/runtime; its sibling /scripts holds
+    // the user scripts. Resolve to absolute for libraries that pass
+    // cwd() through `path.resolve()` later.
+    const _scriptsRoot = _pathMod.resolve(
+      _pathMod.dirname('__RUNE_RUNTIME_DIR__'),
+      'scripts',
+    );
+    globalThis.process.cwd = () => _scriptsRoot;
+    // chdir() is rarely used by Bukkit scripts; throwing keeps
+    // accidental state mutation visible rather than silently
+    // letting a library cd into the Minecraft server root.
+    globalThis.process.chdir = (_dir) => {
+      __rune_log_warn('process.chdir() ignored in Rune scripts; cwd is locked to ' + _scriptsRoot);
+    };
+  }
+} catch (e) {
+  __rune_log_error('process patching failed: ' + (e && e.stack || e));
+}
 
 // Invoked from C++ on every Bukkit event the host has been told we want.
 // `payload` is a Uint8Array of CBOR bytes encoded by the Kotlin event
@@ -1088,6 +1903,55 @@ impl LanguageRuntime for NodeBackend {
     fn set_query_callback(&mut self, cb: QueryCallback) {
         self.query_cb = Some(cb);
         unsafe { ffi::rune_node_set_query_callback(self.handle, cb) };
+    }
+
+    fn invoke_js_proxy(
+        &mut self,
+        proxy_id: u64,
+        method_name: &str,
+        args: &[u8],
+    ) -> Result<Vec<u8>, RuntimeError> {
+        let method_c = CString::new(method_name)
+            .map_err(|e| RuntimeError::Other(format!("method name not C-clean: {e}")))?;
+        let (args_ptr, args_len) = if args.is_empty() {
+            (std::ptr::null::<u8>(), 0usize)
+        } else {
+            (args.as_ptr(), args.len())
+        };
+        // Start with 4 KiB scratch; grow to 16 MiB on -1 (mirrors the
+        // outbound query buffer-growth logic in QueryFn::call).
+        let mut cap = 4096usize;
+        loop {
+            let mut buf = vec![0u8; cap];
+            let n = unsafe {
+                ffi::rune_node_invoke_js_proxy(
+                    self.handle,
+                    proxy_id,
+                    method_c.as_ptr(),
+                    args_ptr,
+                    args_len,
+                    buf.as_mut_ptr(),
+                    buf.len(),
+                )
+            };
+            if n == -1 {
+                let next = (cap * 2).max(8192);
+                if next > 16 * 1024 * 1024 {
+                    return Err(RuntimeError::Other(
+                        "proxy invocation result too large".into(),
+                    ));
+                }
+                cap = next;
+                continue;
+            }
+            if n < 0 {
+                return Err(RuntimeError::Other(format!(
+                    "rune_node_invoke_js_proxy returned {n}"
+                )));
+            }
+            buf.truncate(n as usize);
+            return Ok(buf);
+        }
     }
 }
 

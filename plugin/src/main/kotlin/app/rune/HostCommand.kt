@@ -38,6 +38,30 @@ data class CommandSpec(
     val permission: String?,
     val aliases: List<String>,
     val args: List<CommandArg>,
+    /**
+     * Nested literal-keyed subcommands. Brigadier maps each to a child
+     * literal node, branching tab-completion at each level. A node can
+     * have BOTH args and subcommands -- literals take priority on
+     * matching, so e.g.
+     *   /pex group <name> create
+     * works alongside the implicit "show info" branch
+     *   /pex group <name>
+     * when both are wired.
+     */
+    val subcommands: List<CommandSpec> = emptyList(),
+    /**
+     * Dotted path of this node within its root command, e.g. "pex.user.add".
+     * The plugin uses this as the dispatch-event suffix so JS can route
+     * each leaf to its own handler. Root spec has path = name.
+     */
+    val path: String = name,
+    /**
+     * False when this node only branches into subcommands (no executor
+     * registered on the JS side). Brigadier won't wire executes() for
+     * non-executor nodes, so trying `/pex` on a node with no handler
+     * shows usage instead of dispatching a no-op event.
+     */
+    val hasExecutor: Boolean = true,
 )
 
 data class CommandArg(
@@ -51,8 +75,27 @@ data class CommandArg(
     /**
      * Static suggestion strings for tab completion. Empty -> use whatever
      * default suggester Brigadier attaches to the arg's type (e.g. online
-     * players for `player` type). Snapshotted at registration time --
-     * dynamic-per-keystroke suggesters land in a follow-up.
+     * players for `player` type), OR (if `suggesterId` is set) a JS
+     * callback resolved per keystroke.
      */
     val suggestions: List<String> = emptyList(),
+    /**
+     * When non-null, brigadier installs a SuggestionProvider that calls
+     * the JS-side function registered under this id via the proxy
+     * dispatch bridge. The JS function receives the partial input and
+     * returns the suggestion list (already-filtered if it wants to be).
+     *
+     * Suggester ids are JS-allocated Longs (not Kotlin-proxy ids).
+     */
+    val suggesterId: Long? = null,
+    /**
+     * Subcommands that branch AFTER this arg is consumed. Lets specs
+     * express mixed shapes like
+     *   /pex group list                 -- spec.subcommands ["list"]
+     *   /pex group <name>               -- spec.run (arg consumed, no more tokens)
+     *   /pex group <name> create        -- arg.subcommands ["create"]
+     * where the parent spec's `subcommands` attach as siblings of the
+     * arg chain, and the arg's own `subcommands` attach AFTER the arg.
+     */
+    val subcommands: List<CommandSpec> = emptyList(),
 )

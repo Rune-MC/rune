@@ -268,6 +268,14 @@ struct RuneNode {
   // via `rune_node_set_query_callback` after the Kotlin plugin has wired
   // its Panama upcallStub through `rune_register_query_callback`.
   rune_query_callback query_cb = nullptr;
+  // JS function installed by the bootstrap via
+  // `__rune_install_proxy_dispatch(fn)`. Invoked from
+  // `rune_node_invoke_js_proxy` (Java side) to dispatch a proxied
+  // method call. Signature:
+  //   (proxyId: bigint, method: string, args: any[]) -> any
+  // Stored as a Global so a single Persistent handle keeps it alive
+  // across reload/teardown cycles.
+  v8::Global<v8::Function> proxy_dispatch_fn;
 };
 
 namespace {
@@ -1028,6 +1036,56 @@ void JS_SubscribeEvent(const v8::FunctionCallbackInfo<v8::Value>& args) {
   EnqueueCommand(GetRune(args), std::move(bytes));
 }
 
+// __rune_create_proxy(className: string, methodNames: string[]) -> any
+//
+// Asks the Kotlin host to ByteBuddy-subclass `className` (overriding every
+// abstract method + every entry in `methodNames`) and return a reference
+// to a fresh instance. The CBOR-encoded response is a HostQueryResult
+// wrapping a Bukkit ref: `{__ref, __class, __runeProxyId: "<u64>"}`.
+//
+// JS-side: stored in the proxy dispatch table by `rune.implement`.
+void JS_CreateProxy(const v8::FunctionCallbackInfo<v8::Value>& args) {
+  v8::Isolate* isolate = args.GetIsolate();
+  v8::Local<v8::Context> context = isolate->GetCurrentContext();
+  if (args.Length() < 2 || !args[0]->IsString() || !args[1]->IsArray()) {
+    isolate->ThrowException(v8::Exception::TypeError(
+        v8::String::NewFromUtf8Literal(
+            isolate, "__rune_create_proxy(className, methodNames[])")));
+    return;
+  }
+  v8::String::Utf8Value cls(isolate, args[0]);
+  v8::Local<v8::Array> methods = args[1].As<v8::Array>();
+
+  std::vector<uint8_t> q;
+  cbor_map_header(q, 3);
+  cbor_text(q, "type");
+  cbor_text(q, "create_proxy");
+  cbor_text(q, "class_name");
+  cbor_text(q, *cls, static_cast<size_t>(cls.length()));
+  cbor_text(q, "methods");
+  EncodeCborArray(isolate, context, methods, q);
+
+  args.GetReturnValue().Set(CallQuery(isolate, context, GetRune(args), q));
+}
+
+// __rune_install_proxy_dispatch(fn: Function) -> undefined
+//
+// Bootstrap calls this exactly once with the JS dispatcher root, e.g.
+//   function root(proxyId, methodName, args) { /* look up + invoke */ }
+// We stash it as a Global on the RuneNode so `rune_node_invoke_js_proxy`
+// can call back into JS later (Java -> JS direction).
+void JS_InstallProxyDispatch(const v8::FunctionCallbackInfo<v8::Value>& args) {
+  v8::Isolate* isolate = args.GetIsolate();
+  if (args.Length() < 1 || !args[0]->IsFunction()) {
+    isolate->ThrowException(v8::Exception::TypeError(
+        v8::String::NewFromUtf8Literal(
+            isolate, "__rune_install_proxy_dispatch(fn): fn must be a function")));
+    return;
+  }
+  RuneNode* rn = GetRune(args);
+  rn->proxy_dispatch_fn.Reset(isolate, args[0].As<v8::Function>());
+}
+
 // Install the rune-* V8-native ops onto globalThis as `__rune_*` so the
 // bootstrap JS can wire them into the user-facing `rune` global / `console`.
 void InstallNativeOps(v8::Isolate* isolate,
@@ -1056,6 +1114,8 @@ void InstallNativeOps(v8::Isolate* isolate,
   bind("__rune_get_static_field", JS_GetStaticField);
   bind("__rune_construct", JS_Construct);
   bind("__rune_decode_event", JS_DecodeEvent);
+  bind("__rune_install_proxy_dispatch", JS_InstallProxyDispatch);
+  bind("__rune_create_proxy", JS_CreateProxy);
 }
 
 }  // namespace
@@ -1104,6 +1164,7 @@ void rune_node_free(RuneNode* rn) {
       // function's persistent handle keeps the context alive longer than
       // the env::Stop tries to tear it down.
       rn->dispatch_fn.Reset();
+      rn->proxy_dispatch_fn.Reset();
 
       // 1. Tell Node to terminate the environment. Schedules the env to
       //    exit at the next safe yield point: pending JS throws "Script
@@ -1352,6 +1413,79 @@ int rune_node_dispatch_event(RuneNode* rn,
 void rune_node_set_query_callback(RuneNode* rn, rune_query_callback cb) {
   if (!rn) return;
   rn->query_cb = cb;
+}
+
+ptrdiff_t rune_node_invoke_js_proxy(RuneNode* rn,
+                                    uint64_t proxy_id,
+                                    const char* method_name,
+                                    const uint8_t* args,
+                                    size_t args_len,
+                                    uint8_t* out,
+                                    size_t cap) {
+  if (!rn || !method_name) return -2;
+  if (!out && cap > 0) return -2;
+  if (rn->proxy_dispatch_fn.IsEmpty()) {
+    // Bootstrap hasn't installed the dispatcher yet. Caller can retry
+    // after the next tick, but most likely this means the script that
+    // owned the proxy was reloaded out from under us.
+    return -2;
+  }
+  v8::Isolate* isolate = rn->setup->isolate();
+
+  // Cross-thread safe: PAPI placeholders sometimes resolve on async chat
+  // threads. Locker grants exclusive access to the isolate (re-entrant
+  // on the same thread). Without it a non-main-thread caller would
+  // either UB or assert in V8.
+  v8::Locker locker(isolate);
+  v8::Isolate::Scope iscope(isolate);
+  v8::HandleScope hscope(isolate);
+  v8::Local<v8::Context> context = rn->setup->context();
+  v8::Context::Scope cscope(context);
+
+  // Decode the args CBOR array into a v8::Array. CBOR layout: a single
+  // array head followed by N items. DecodeCborValue consumes the whole
+  // thing in one call.
+  v8::Local<v8::Value> args_value = v8::Array::New(isolate, 0);
+  if (args && args_len > 0) {
+    CborReader r{args, args + args_len};
+    bool ok = true;
+    args_value = DecodeCborValue(isolate, context, r, ok);
+    if (!ok || !args_value->IsArray()) {
+      args_value = v8::Array::New(isolate, 0);
+    }
+  }
+
+  v8::Local<v8::Function> fn = rn->proxy_dispatch_fn.Get(isolate);
+  v8::Local<v8::Value> argv[3] = {
+      // BigInt mirrors Rust's u64; JS receives `bigint`. The dispatcher
+      // converts back via Number(...) for the Map lookup -- proxy_ids fit
+      // safely in 2^53 in practice.
+      v8::BigInt::NewFromUnsigned(isolate, proxy_id),
+      v8::String::NewFromUtf8(isolate, method_name).ToLocalChecked(),
+      args_value,
+  };
+  v8::TryCatch tc(isolate);
+  v8::Local<v8::Value> result;
+  if (!fn->Call(context, v8::Undefined(isolate), 3, argv).ToLocal(&result)) {
+    // Surface the JS exception into the server log so admins can see
+    // which proxied handler threw. Returns -2 -- the Java caller gets a
+    // null and the method's declared return type's default.
+    if (tc.HasCaught()) {
+      v8::Local<v8::Value> msg = tc.Exception();
+      v8::String::Utf8Value msg_s(isolate, msg);
+      std::fprintf(stderr, "[rune-node] proxy dispatch threw: %s\n",
+                   *msg_s ? *msg_s : "(no message)");
+    }
+    return -2;
+  }
+
+  // Encode the JS return value into CBOR and copy back. If `cap` is too
+  // small, signal -1 so the loader retries with a bigger buffer.
+  std::vector<uint8_t> result_cbor;
+  EncodeCborValue(isolate, context, result, result_cbor);
+  if (result_cbor.size() > cap) return -1;
+  std::memcpy(out, result_cbor.data(), result_cbor.size());
+  return static_cast<ptrdiff_t>(result_cbor.size());
 }
 
 ptrdiff_t rune_node_drain_commands(RuneNode* rn, uint8_t* out, size_t cap) {

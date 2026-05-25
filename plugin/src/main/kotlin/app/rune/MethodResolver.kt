@@ -159,6 +159,23 @@ object ArgCoercer {
                 val upper = type.upperBounds.firstOrNull() ?: return null
                 return coerce(arg, upper, registry)
             }
+            is java.lang.reflect.TypeVariable<*> -> {
+                // Generic type variable (e.g. `Z` in `set(K, PersistentDataType<T, Z>, Z)`).
+                // Bounds are the erasure target -- collapse to the first
+                // bound (or Object if unbounded) and recurse. Without this
+                // branch, calling any generic Bukkit method whose value arg
+                // is type-parameter-typed bounces with "no matching ..."
+                // because the value coercion silently returns null.
+                val upper = type.bounds.firstOrNull() ?: Any::class.java
+                return coerce(arg, upper, registry)
+            }
+            is java.lang.reflect.GenericArrayType -> {
+                // T[] -- erase to Object[] for coercion. Callers that
+                // need precise element typing should pre-build the array
+                // and pass as a single ref.
+                val component = (type.genericComponentType as? Class<*>) ?: Any::class.java
+                return coerce(arg, java.lang.reflect.Array.newInstance(component, 0).javaClass, registry)
+            }
             else -> return null
         }
 
@@ -335,6 +352,28 @@ object ArgCoercer {
             } catch (_: NoSuchFieldException) {
                 // fall through
             }
+        }
+
+        // Pass-through for widely-typed slots: if the declared parameter is
+        // `Object` (or any super of the natural Java type for this CBOR
+        // primitive), just hand the value through unchanged. Without this
+        // branch a literal JS string can't satisfy e.g.
+        // `FixedMetadataValue(Plugin, Object)` -- the String branch above
+        // only triggers when paramType IS String, not when it accepts one.
+        val asJava: Any? = when (arg) {
+            is UnicodeString -> arg.string
+            is CborNumber -> arg.value.toLong()
+            is co.nstant.`in`.cbor.model.DoublePrecisionFloat -> arg.value
+            is co.nstant.`in`.cbor.model.SinglePrecisionFloat -> arg.value
+            is SimpleValue -> when (arg.simpleValueType) {
+                SimpleValueType.TRUE -> true
+                SimpleValueType.FALSE -> false
+                else -> null
+            }
+            else -> null
+        }
+        if (asJava != null && paramType.isAssignableFrom(asJava.javaClass)) {
+            return asJava
         }
 
         return null

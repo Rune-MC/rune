@@ -173,7 +173,16 @@ async function main() {
   // Extract.
   await mkdir(installDir, { recursive: true });
   console.log(`[fetch-libnode] extracting -> ${installDir}`);
-  const tar = spawnSync('tar', ['-xzf', tarPath, '-C', installDir], { stdio: 'inherit' });
+  // GNU tar on Git Bash / MSYS sees `C:\...` and tries DNS resolution
+  // ("Cannot connect to C: resolve failed"). --force-local disables
+  // the host:path heuristic. BSD tar (system tar on Win10+/macOS) and
+  // POSIX tar (Linux) ignore the flag harmlessly when they don't know
+  // it -- so we feature-detect by trying with the flag first.
+  let tar = spawnSync('tar', ['--force-local', '-xzf', tarPath, '-C', installDir], { stdio: 'inherit' });
+  if (tar.status !== 0) {
+    // Retry without the flag for tar variants that reject unknown options.
+    tar = spawnSync('tar', ['-xzf', tarPath, '-C', installDir], { stdio: 'inherit' });
+  }
   if (tar.status !== 0) {
     console.error('[fetch-libnode] tar extract failed (is `tar` on PATH?)');
     exit(tar.status ?? 1);

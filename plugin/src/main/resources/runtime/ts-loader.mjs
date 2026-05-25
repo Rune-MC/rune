@@ -44,11 +44,38 @@ const isTs = (url) => url.endsWith('.ts') || url.endsWith('.tsx');
 // (better for module isolation + tree-shaking awareness).
 const RUNE_VIRTUAL_URL = 'rune:globals';
 
+// For relative/absolute imports that omit a file extension (e.g.
+// `import "./lib/foo"`), Node ESM strict resolution gives up with
+// ERR_MODULE_NOT_FOUND. Bundlers add ".ts" / ".tsx" / "/index.ts"
+// automatically; we replicate that here so user scripts can write
+// the same import shape they'd use with esbuild, vite, or tsc with
+// "moduleResolution":"bundler".
+const TS_EXT_CANDIDATES = ['.ts', '.tsx', '/index.ts', '/index.tsx'];
+const HAS_EXT = /\.[a-zA-Z0-9]+$/;
+
 export async function resolve(specifier, context, nextResolve) {
   if (specifier === 'rune') {
     return { url: RUNE_VIRTUAL_URL, shortCircuit: true, format: 'module' };
   }
-  return nextResolve(specifier, context);
+  try {
+    return await nextResolve(specifier, context);
+  } catch (err) {
+    // Only intercept the "no extension" case. Bare specifiers
+    // (node_modules), absolute file:// URLs with an extension, etc.
+    // bubble up unchanged.
+    const isRelative = specifier.startsWith('./') || specifier.startsWith('../');
+    if (err?.code !== 'ERR_MODULE_NOT_FOUND' || !isRelative || HAS_EXT.test(specifier)) {
+      throw err;
+    }
+    for (const ext of TS_EXT_CANDIDATES) {
+      try {
+        return await nextResolve(specifier + ext, context);
+      } catch (inner) {
+        if (inner?.code !== 'ERR_MODULE_NOT_FOUND') throw inner;
+      }
+    }
+    throw err;
+  }
 }
 
 export async function load(url, context, nextLoad) {

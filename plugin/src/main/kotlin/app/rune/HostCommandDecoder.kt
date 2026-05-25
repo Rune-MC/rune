@@ -55,29 +55,46 @@ object HostCommandDecoder {
         return (value as? UnicodeString)?.string
     }
 
-    private fun decodeCommandSpec(map: CborMap): CommandSpec {
+    private fun decodeCommandSpec(map: CborMap, parentPath: String = ""): CommandSpec {
         val name = map.getString("name")
             ?: throw IllegalArgumentException("register_command missing 'name'")
+        val path = if (parentPath.isEmpty()) name else "$parentPath.$name"
         val argsRaw = map[UnicodeString("args")] as? CborArray
         val args = argsRaw?.dataItems.orEmpty().mapNotNull { item ->
-            (item as? CborMap)?.let(::decodeCommandArg)
+            (item as? CborMap)?.let { decodeCommandArg(it, parentPath = path) }
         }
         val aliasesRaw = map[UnicodeString("aliases")] as? CborArray
         val aliases = aliasesRaw?.dataItems.orEmpty()
             .mapNotNull { (it as? UnicodeString)?.string }
+        val subsRaw = map[UnicodeString("subcommands")] as? CborArray
+        val subs = subsRaw?.dataItems.orEmpty().mapNotNull { item ->
+            (item as? CborMap)?.let { decodeCommandSpec(it, parentPath = path) }
+        }
+        // `has_executor` defaults to true for backward compat with the old
+        // (flat-only) wire format. New JS code sends false for tree-internal
+        // nodes that only branch into subcommands.
+        val hasExec = map.getBoolean("has_executor") ?: true
         return CommandSpec(
             name = name,
             description = map.getString("description") ?: "",
             permission = map.getString("permission"),
             aliases = aliases,
             args = args,
+            subcommands = subs,
+            path = path,
+            hasExecutor = hasExec,
         )
     }
 
-    private fun decodeCommandArg(map: CborMap): CommandArg {
+    private fun decodeCommandArg(map: CborMap, parentPath: String = ""): CommandArg {
         val suggestionsRaw = map[UnicodeString("suggestions")] as? CborArray
         val suggestions = suggestionsRaw?.dataItems.orEmpty()
             .mapNotNull { (it as? UnicodeString)?.string }
+        val suggesterId = (map[UnicodeString("suggester_id")] as? CborNumber)?.value?.toLong()
+        val subsRaw = map[UnicodeString("subcommands")] as? CborArray
+        val subs = subsRaw?.dataItems.orEmpty().mapNotNull { item ->
+            (item as? CborMap)?.let { decodeCommandSpec(it, parentPath = parentPath) }
+        }
         return CommandArg(
             name = map.getString("name")
                 ?: throw IllegalArgumentException("command arg missing 'name'"),
@@ -88,6 +105,8 @@ object HostCommandDecoder {
             greedy = map.getBoolean("greedy") ?: false,
             optional = map.getBoolean("optional") ?: false,
             suggestions = suggestions,
+            suggesterId = suggesterId,
+            subcommands = subs,
         )
     }
 

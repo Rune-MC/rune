@@ -298,6 +298,84 @@ pub unsafe extern "C" fn rune_register_query_callback(
     }
 }
 
+/// Synchronously invoke a JS-installed proxy method (Java -> JS direction).
+///
+/// Used by the Kotlin plugin when a Java method on a ByteBuddy-generated
+/// proxy (e.g. a PAPI `PlaceholderExpansion` subclass) is invoked: the
+/// generated body forwards `(proxy_id, method, cbor_args)` through Panama
+/// into here, this function routes it to the first backend that owns the
+/// proxy, and the JS handler's return value comes back as CBOR.
+///
+/// `args` may be null with `args_len == 0` for zero-argument methods.
+///
+/// Returns the number of bytes written into `out`.
+/// `-1` -> `out`/`cap` too small (caller should retry with a larger buffer).
+/// `-2` -> internal error (e.g. no JS dispatcher installed, isolate gone).
+///
+/// # Safety
+/// `loader` must come from `rune_init`. `method_name` must be a valid
+/// NUL-terminated UTF-8 string. `args` must point to at least `args_len`
+/// readable bytes (or be NULL with `args_len == 0`). `out` must point to
+/// at least `cap` writable bytes (or be NULL with `cap == 0`).
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn rune_invoke_js_proxy(
+    loader: *mut Loader,
+    proxy_id: u64,
+    method_name: *const c_char,
+    args: *const u8,
+    args_len: usize,
+    out: *mut u8,
+    cap: usize,
+) -> isize {
+    if loader.is_null() || method_name.is_null() {
+        return -2;
+    }
+    if out.is_null() && cap > 0 {
+        return -2;
+    }
+    let loader = unsafe { &mut *loader };
+    let method_str = match unsafe { CStr::from_ptr(method_name) }.to_str() {
+        Ok(s) => s,
+        Err(_) => return -2,
+    };
+    let args_slice: &[u8] = if args.is_null() || args_len == 0 {
+        &[]
+    } else {
+        unsafe { std::slice::from_raw_parts(args, args_len) }
+    };
+
+    // First backend that can satisfy the call wins. Proxy IDs are unique
+    // per loader (allocated by Kotlin's JsProxyFactory); the JS dispatch
+    // root returns a CBOR `null` if the proxy_id is unknown -- so even if
+    // a future loader hosts multiple runtimes, only one will own each ID.
+    for backend in loader.backends.iter_mut() {
+        match backend.invoke_js_proxy(proxy_id, method_str, args_slice) {
+            Ok(bytes) => {
+                if bytes.len() > cap {
+                    // The caller's buffer was too small. We DON'T park
+                    // these bytes because the same Java call can simply
+                    // re-invoke us with a bigger buffer -- the JS handler
+                    // is referentially transparent from the loader's POV.
+                    return -1;
+                }
+                if !bytes.is_empty() {
+                    unsafe {
+                        std::ptr::copy_nonoverlapping(bytes.as_ptr(), out, bytes.len());
+                    }
+                }
+                return bytes.len() as isize;
+            }
+            Err(e) => {
+                log::error!(
+                    "invoke_js_proxy({proxy_id}, {method_str}) -> {}: {e}",
+                    backend.name()
+                );
+            }
+        }
+    }
+    -2
+}
+
 /// Free the loader. After this call, the pointer is invalid.
 ///
 /// # Safety

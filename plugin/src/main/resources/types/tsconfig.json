@@ -14,7 +14,9 @@
     "skipLibCheck": true,
     "esModuleInterop": true,
     "forceConsistentCasingInFileNames": true,
-    "types": []
+    "_types_comment": "node is vendored to ./node_modules/@types/node by the plugin on enable -- no `npm install` needed for the Node stdlib.",
+    "types": ["node"],
+    "typeRoots": ["./node_modules/@types"]
   },
   "include": [
     "./**/*.ts",
@@ -25,6 +27,7 @@
     "./types/**/*.d.ts"
   ],
   "exclude": [
-    "**/node_modules"
+    "**/node_modules/**/*",
+    "!**/node_modules/@types/**"
   ]
 }

@@ -180,6 +180,74 @@ interface RuneApi {
         yaw?: number, pitch?: number,
     ): Location;
 
+    // ---------------- Message helpers ----------------
+    /**
+     * Parse MiniMessage to an Adventure Component. Used internally by
+     * `msg` / `title` / `actionBar` and the `item().name(...)` builder;
+     * exposed so scripts can pre-build components for re-use.
+     */
+    mm(template: string): any;
+    /** Send a MiniMessage-formatted line. `audience` may be a single ref or array. */
+    msg(audience: any | any[], template: string): void;
+    /**
+     * Show a title to `player`. All durations are in ms; defaults are
+     * 500 / 3000 / 500.
+     */
+    title(
+        player: Player,
+        title: string,
+        subtitle?: string,
+        opts?: { fadeInMs?: number; stayMs?: number; fadeOutMs?: number },
+    ): void;
+    /** Push a MiniMessage-formatted action-bar line. */
+    actionBar(player: Player, template: string): void;
+
+    // ---------------- Builders ----------------
+    /**
+     * Fluent ItemStack builder. Replaces the verbose
+     * `getItemMeta()` / `setItemMeta()` dance.
+     *
+     *   const sword = rune.item(bukkit.Material.DIAMOND_SWORD)
+     *     .name("<gold>Excalibur")
+     *     .lore(["<gray>Wielded by kings"])
+     *     .enchant("sharpness", 5)
+     *     .unbreakable()
+     *     .glow()
+     *     .build();
+     */
+    item(material: Material): ItemBuilder;
+
+    /**
+     * Spawn a Bukkit entity at `location`. `typeName` is matched
+     * case-insensitively against `EntityType` constants (zombie,
+     * skeleton, item_display, ...). Optional `configure` callback
+     * fires synchronously on the spawned entity.
+     */
+    spawn(
+        location: Location,
+        typeName: string,
+        configure?: (entity: Entity) => void,
+    ): Entity;
+
+    /**
+     * Chest GUI with per-slot click handlers. All clicks inside the
+     * GUI are auto-cancelled (so display items can't be picked up).
+     *
+     *   const gui = rune.gui({ title: "<gold>Shop", rows: 3 }, (g) => {
+     *     g.border(rune.item(bukkit.Material.BLACK_STAINED_GLASS_PANE).name(" ").build());
+     *     g.slot(13,
+     *       rune.item(bukkit.Material.DIAMOND).name("Buy").build(),
+     *       (e) => {
+     *         e.getWhoClicked().sendMessage("Purchased!");
+     *         e.getWhoClicked().closeInventory();
+     *       },
+     *     );
+     *     g.onClose((e) => console.info("closed"));
+     *   });
+     *   gui.open(player);
+     */
+    gui(spec: GuiSpec, init?: (gui: Gui) => void): Gui;
+
     // ---------------- Static Java surface ----------------
     /** org.bukkit.Bukkit static methods. */
     readonly bukkit: BukkitStatic;
@@ -191,6 +259,13 @@ interface RuneApi {
     readonly particle: Record<string, ParticleRef>;
     /** Sound enum values. */
     readonly sound: Record<string, SoundRef>;
+    /**
+     * PersistentDataType singletons -- pass to
+     * `meta.getPersistentDataContainer().set(key, type, value)`. Common:
+     * `rune.pdt.STRING`, `rune.pdt.INTEGER`, `rune.pdt.LONG`, `.DOUBLE`,
+     * `.BYTE`, `.BYTE_ARRAY`, `.BOOLEAN` (Paper).
+     */
+    readonly pdt: Record<string, any>;
 
     /** Call any public static method on any class on the Paper classpath. */
     callStatic<T = unknown>(className: string, method: string, ...args: unknown[]): T;
@@ -211,6 +286,51 @@ interface RuneApi {
      * binding when you're using a class once.
      */
     new<T = any>(className: string, ...args: any[]): T;
+
+    /**
+     * Implement (subclass) a Java abstract class or interface from JS.
+     *
+     * The plugin generates a runtime subclass via ByteBuddy: every
+     * abstract method, plus any method whose name appears as a key in
+     * `methods`, is intercepted and routed to your JS handler. Other
+     * (non-abstract, non-listed) methods inherit the parent's body.
+     *
+     * The returned ref is a live Bukkit-typed handle -- pass it to any
+     * Java API that takes the parent class. Examples:
+     *
+     *   // PAPI placeholder expansion
+     *   const expansion = rune.implement(
+     *     "me.clip.placeholderapi.expansion.PlaceholderExpansion",
+     *     {
+     *       getIdentifier: () => "rune",
+     *       getAuthor:     () => "rune-perms",
+     *       getVersion:    () => "1.0",
+     *       persist:       () => true,
+     *       // %rune_prefix%, %rune_suffix_NAME%, ...
+     *       onRequest: (offlinePlayer, params) => {
+     *         if (params === "prefix") return getPrefixFor(offlinePlayer);
+     *         if (params.startsWith("suffix_")) return ...;
+     *         return null;
+     *       },
+     *     },
+     *   );
+     *   papi.PlaceholderAPI.registerExpansion(expansion);
+     *
+     * Handler invocation is synchronous from Java's perspective; your
+     * function runs against the V8 isolate inline (cross-thread-safe
+     * via v8::Locker). Handlers MUST be synchronous: returning a
+     * promise will resolve to a "[Promise]" string, not the awaited
+     * value.
+     *
+     * Arguments arrive wrapped as Bukkit refs where applicable, so you
+     * can call `.getName()` / `.getUniqueId()` etc. directly. The
+     * return value is coerced to the method's declared return type
+     * (string, number, boolean, or Bukkit ref).
+     */
+    implement<T = any>(
+        className: string,
+        methods: Record<string, (...args: any[]) => unknown>,
+    ): T;
 }
 
 interface BukkitStatic {
@@ -226,148 +346,137 @@ interface BukkitStatic {
 
 // ---------------------------------------------------------------------------
 // Reference classes -- live Bukkit objects.
+//
+// `Player`, `Entity`, `Block`, `Location`, `World`, `ItemStack`,
+// `PersistentDataContainer`, `Material`, etc. are EXCLUSIVELY declared in
+// the auto-generated `bukkit.d.ts` (via `declare global { ... }`). The
+// runtime proxy supports both `player.getName()` (Bukkit) and synthetic
+// shortcuts like `player.uuid` -- but to avoid the "two unrelated types
+// with the same name" TS error that hit users in earlier versions, only
+// the full Bukkit-generated interfaces are exported. Use `.getName()` /
+// `.getUniqueId().toString()` for stable access; the snapshot shortcuts
+// still work at runtime if you cast through `as any`.
+//
+// RuneRef is hoisted to the global scope below so bukkit.d.ts's
+// `interface Player extends ... RuneRef` resolves correctly.
 // ---------------------------------------------------------------------------
 
-/** Marker present on every Bukkit-backed object. Internal. */
-interface RuneRef {
-    readonly __ref: number;
-    readonly __class: string;
+declare global {
+    /** Marker present on every Bukkit-backed object. Internal. */
+    interface RuneRef {
+        readonly __ref: number;
+        readonly __class: string;
+    }
+
+    // Node globals (`process`, `Buffer`, `require`, ...) come from the
+    // vendored @types/node tree extracted next to this file on plugin
+    // enable. tsconfig.json's "types": ["node"] picks them up; nothing
+    // to hand-roll here.
+
+    // EntityType, Particle, Sound -- enum-style ref bundles surfaced by
+    // rune.entityType / rune.particle / rune.sound. The full Bukkit types
+    // are in bukkit.d.ts; these aliases keep the rune.d.ts return-type
+    // declarations terse.
+    type EntityTypeRef = RuneRef & { [method: string]: any };
+    type ParticleRef = RuneRef & { [method: string]: any };
+    type SoundRef = RuneRef & { [method: string]: any };
+
+    // ----- Builders / factories -----
+
+    interface ItemBuilder {
+        amount(n: number): ItemBuilder;
+        name(miniMessage: string): ItemBuilder;
+        lore(miniMessageLines: string[]): ItemBuilder;
+        /**
+         * Add an enchantment. `id` is a minecraft-namespaced key
+         * (`sharpness`, `mending`, `unbreaking`, ...); custom datapack
+         * enchants can be `"datapack:enchant_name"`.
+         */
+        enchant(id: string, level?: number): ItemBuilder;
+        unbreakable(): ItemBuilder;
+        /** Cosmetic shimmer (hidden unbreaking enchant). */
+        glow(): ItemBuilder;
+        customModelData(n: number): ItemBuilder;
+        /** Add a Bukkit ItemFlag constant by name (`HIDE_ENCHANTS`, ...). */
+        flag(name: string): ItemBuilder;
+        /**
+         * Set a PersistentDataContainer entry (modern Bukkit NBT).
+         *
+         *   .data("origin", "trial_chamber")     // STRING (auto-typed)
+         *   .data("level", 7)                    // INTEGER (auto)
+         *   .data("weight", 3.5)                 // DOUBLE (auto)
+         *   .data("magic", true)                 // BOOLEAN/BYTE (auto)
+         *   .data("count", 100n, rune.pdt.LONG)  // explicit type
+         *
+         * Bare keys land under `rune:` (so `.data("foo", ...)` writes to
+         * `rune:foo`). Use `"plugin:name"` for another namespace.
+         */
+        data(key: string, value: string | number | bigint | boolean, type?: any): ItemBuilder;
+        /**
+         * Set the skull owner for a `PLAYER_HEAD` item so it renders that
+         * player's skin. Accepts a Player / OfflinePlayer ref, a UUID
+         * string, or a player name. No-op for non-PLAYER_HEAD materials.
+         *
+         *   rune.item(bukkit.Material.PLAYER_HEAD)
+         *     .skullOwner(player)
+         *     .name("<gold>" + player.getName())
+         *     .build();
+         */
+        skullOwner(target: Player | OfflinePlayer | string): ItemBuilder;
+        build(): ItemStack;
+    }
+
+    interface GuiSpec {
+        title?: string;
+        /** Rows 1-6 (each 9 slots). Default 3. */
+        rows?: number;
+    }
+
+    /**
+     * The Gui object is also a live `Inventory` ref -- unknown property
+     * reads delegate to the underlying Bukkit Inventory. That makes both
+     * sides of the comparison work in event handlers:
+     *
+     *   if (event.getInventory().equals(gui)) { ... }
+     *   if (event.getClickedInventory()?.__ref === gui.__ref) { ... }
+     *
+     * The index signature lets TypeScript accept arbitrary Inventory
+     * method calls (`gui.getSize()`, `gui.getViewers()`, ...) -- they
+     * dispatch through the proxy bridge at call time.
+     */
+    /**
+     * Click handler signature for `gui.slot/fill/border`. The event is
+     * Bukkit's `InventoryClickEvent` with all the usual methods
+     * (`getWhoClicked()`, `getRawSlot()`, `getCurrentItem()`, etc.).
+     *
+     * **You DO NOT need to call `e.setCancelled(true)` -- Rune cancels
+     * every click while the gui is being viewed before invoking your
+     * handler.** Just do the side-effect (open another gui, give an
+     * item, close the inventory, ...).
+     */
+    type GuiClickHandler = (e: InventoryClickEvent) => void;
+
+    interface Gui {
+        /** Place an item at `slot`. Click handler is optional. */
+        slot(slot: number, item: ItemStack, onClick?: GuiClickHandler): Gui;
+        /** Fill empty slots (does not overwrite). */
+        fill(item: ItemStack, onClick?: GuiClickHandler): Gui;
+        /** Decorative border (top + bottom rows, first + last column). */
+        border(item: ItemStack, onClick?: GuiClickHandler): Gui;
+        /** Callback when the player closes the inventory. */
+        onClose(fn: (e: InventoryCloseEvent) => void): Gui;
+        /** Open for one player. Re-callable to refresh state. */
+        open(player: Player): Gui;
+        /** Live `org.bukkit.inventory.Inventory` ref -- escape hatch. */
+        readonly inventory: any;
+        /** Inventory ref id (delegated from `inventory.__ref`). */
+        readonly __ref: number;
+        /** Always `"Inventory"`. */
+        readonly __class: string;
+        /** Delegated Inventory methods (getSize, getViewers, equals, ...). */
+        [method: string]: any;
+    }
 }
-
-interface Player extends RuneRef {
-    readonly name: string;
-    readonly uuid: string;
-
-    // Mutations -- void
-    sendMessage(message: string): void;
-    teleport(location: Location): void;
-    setHealth(health: number): void;
-    setFoodLevel(level: number): void;
-    setGameMode(mode: string): void;
-    kick(message?: string): void;
-    chat(message: string): void;
-    setOp(op: boolean): void;
-    setFlying(flying: boolean): void;
-    setAllowFlight(allow: boolean): void;
-    giveExp(exp: number): void;
-    setLevel(level: number): void;
-    performCommand(command: string): void;
-    setWalkSpeed(speed: number): void;
-
-    // Reads
-    getHealth(): number;
-    getFoodLevel(): number;
-    getLevel(): number;
-    getGameMode(): string;
-    isOp(): boolean;
-    isOnline(): boolean;
-    isFlying(): boolean;
-    getAllowFlight(): boolean;
-    getLocation(): Location;
-    getWorld(): World;
-    getDisplayName(): string;
-    hasPermission(permission: string): boolean;
-
-    [method: string]: any;
-}
-
-interface Entity extends RuneRef {
-    readonly kind: string;
-    readonly uuid: string;
-    readonly name: string;
-
-    teleport(location: Location): void;
-    remove(): void;
-    setCustomName(name: string): void;
-    setCustomNameVisible(visible: boolean): void;
-    setVelocity(velocity: unknown): void;
-    getLocation(): Location;
-    getWorld(): World;
-    isDead(): boolean;
-    isOnGround(): boolean;
-
-    [method: string]: any;
-}
-
-interface Block extends RuneRef {
-    readonly material: string;
-    readonly x: number;
-    readonly y: number;
-    readonly z: number;
-    readonly world: string;
-
-    setType(material: Material | string): void;
-    breakNaturally(): boolean;
-    getType(): Material;
-    getLocation(): Location;
-    getWorld(): World;
-    getRelative(face: string): Block;
-    isEmpty(): boolean;
-    isLiquid(): boolean;
-    getLightLevel(): number;
-    getPersistentDataContainer(): PersistentDataContainer;
-
-    [method: string]: any;
-}
-
-interface Location extends RuneRef {
-    readonly x: number;
-    readonly y: number;
-    readonly z: number;
-    readonly yaw: number;
-    readonly pitch: number;
-    readonly world: string;
-
-    getBlock(): Block;
-    distance(other: Location): number;
-    add(x: number, y: number, z: number): Location;
-    [method: string]: any;
-}
-
-interface World extends RuneRef {
-    readonly name: string;
-    readonly uuid: string;
-
-    setTime(time: number): void;
-    setStorm(hasStorm: boolean): void;
-    strikeLightning(location: Location): void;
-    getBlockAt(x: number, y: number, z: number): Block;
-    getTime(): number;
-    getPlayers(): Player[];
-    getEntities(): Entity[];
-    spawnEntity(location: Location, type: string): Entity;
-
-    [method: string]: any;
-}
-
-interface ItemStack extends RuneRef {
-    readonly material: string;
-    readonly amount: number;
-
-    setAmount(amount: number): void;
-    getType(): Material;
-    setType(material: Material | string): void;
-    getAmount(): number;
-
-    [method: string]: any;
-}
-
-interface PersistentDataContainer extends RuneRef {
-    set(key: unknown, type: unknown, value: unknown): void;
-    get(key: unknown, type: unknown): unknown;
-    has(key: unknown, type: unknown): boolean;
-    remove(key: unknown): void;
-    getKeys(): unknown[];
-
-    [method: string]: any;
-}
-
-// Material / EntityType / Particle / Sound are enum singletons. Each value
-// is itself a ref you can call methods on.
-interface Material extends RuneRef { [method: string]: any; }
-interface EntityTypeRef extends RuneRef { [method: string]: any; }
-interface ParticleRef extends RuneRef { [method: string]: any; }
-interface SoundRef extends RuneRef { [method: string]: any; }
 
 // ---------------------------------------------------------------------------
 // Event map.
@@ -512,12 +621,27 @@ declare global {
         /** If true, the arg may be omitted (Brigadier branches before it). */
         optional?: boolean;
         /**
-         * Static tab-completion suggestions. Pass a string[] or a function
-         * that returns one -- the function is called ONCE at registration
-         * time (snapshot). Truly dynamic per-keystroke suggesters are a
-         * planned follow-up.
+         * Tab-completion suggestions. Three shapes:
+         *   * `string[]` -- fixed list, prefix-filtered by Brigadier
+         *   * `() => string[]` -- snapshot at registration time
+         *   * `(partial: string) => string[]` -- DYNAMIC: called against
+         *     the V8 isolate on every keystroke. Use this for lists that
+         *     mutate at runtime (online players via Brigadier built-ins
+         *     already work; this is for things like group names that the
+         *     script itself owns). The callback runs synchronously --
+         *     keep it cheap (Map lookup, not Mongo query).
          */
-        suggest?: string[] | (() => string[]);
+        suggest?:
+            | string[]
+            | (() => string[])
+            | ((partial: string) => string[]);
+        /**
+         * Subcommands that branch AFTER this arg slot. Only consulted
+         * when using the imperative `rune.command({tree})` form -- the
+         * decorator API derives this automatically from the path-string
+         * topology across `@Command("a b c")` classes.
+         */
+        subcommands?: CommandSpec[];
     }
 
     interface CommandOptions {
@@ -535,11 +659,54 @@ declare global {
         register(): this;
     }
 
-    /** Top-level fields for the object form of `rune.command({...})`. */
+    /**
+     * Top-level fields for the object form of `rune.command({...})`.
+     *
+     * Three patterns:
+     *
+     *   // Flat command -- one executor, no branching
+     *   rune.command({
+     *     name: "broadcast",
+     *     args: [{ name: "msg", type: "greedy", greedy: true }],
+     *     run: (ctx) => { ... },
+     *   });
+     *
+     *   // Branching tree -- each subcommand is a Brigadier literal
+     *   rune.command({
+     *     name: "pex",
+     *     subcommands: [
+     *       { name: "reload", run: (ctx) => { ... } },
+     *       {
+     *         name: "user",
+     *         args: [{ name: "player", type: "player" }],
+     *         run: (ctx) => { ... },          // /pex user <player>
+     *         subcommands: [
+     *           {
+     *             name: "add",
+     *             args: [{ name: "perm", type: "string" }],
+     *             run: (ctx) => { ... },     // /pex user <player> add <perm>
+     *           },
+     *           { name: "remove", args: [...], run: ... },
+     *         ],
+     *       },
+     *     ],
+     *   });
+     *
+     *   // Dynamic tab-completion -- suggester callback fires per keystroke
+     *   rune.command({
+     *     name: "warp",
+     *     args: [{ name: "name", type: "word", suggest: (partial) => allWarpNames() }],
+     *     run: (ctx) => { ... },
+     *   });
+     *
+     * An intermediate node (one that ONLY branches into subcommands) may
+     * omit `run` -- Brigadier just shows usage if the user stops there.
+     */
     interface CommandSpec extends CommandOptions {
         name: string;
         args?: Array<{ name: string; type: ArgType } & Omit<ArgOptions, 'type'>>;
-        run: (ctx: CommandCtx) => void | Promise<void>;
+        run?: (ctx: CommandCtx) => void | Promise<void>;
+        subcommands?: CommandSpec[];
     }
 
     /**
@@ -565,27 +732,56 @@ declare global {
     }
 
     /**
-     * Decorate a class with `@Command("name", opts?)`. The class body uses
-     * `@Arg(...)` to declare typed arguments and `@Run` to mark the
-     * executor method. The class must have a zero-arg constructor.
+     * Decorate a class with `@Command("path", opts?)`. The class body
+     * uses `@Arg(...)` to declare typed arguments and `@Run` to mark
+     * the executor method. The class must have a zero-arg constructor.
      *
+     * Path syntax: space-separated literals identify a leaf in the
+     * Brigadier tree. Each leaf is its own class. Args are matched by
+     * NAME across siblings -- shared args at the same level merge into
+     * a single Brigadier arg slot, child-specific args chain after the
+     * leaf literal.
+     *
+     *   // Flat (legacy): one class, one Brigadier node
      *   @Command("give", { permission: "rune.give" })
      *   export class GiveCommand {
      *     @Arg("player", "who to give to", { type: "player" })
      *     player!: Player;
-     *
      *     @Arg("count", { type: "int", min: 1, max: 64 })
      *     count!: number;
-     *
      *     @Run
-     *     run(ctx: CommandCtx) {
-     *       this.player.getInventory().addItem(
-     *         new bukkit.inventory.ItemStack(bukkit.Material.DIAMOND, this.count)
-     *       );
-     *     }
+     *     run(ctx: CommandCtx) { ... }
      *   }
+     *
+     *   // Tree: one class per leaf, decorator path picks the level
+     *   @Command("pex", { description: "permissions manager" })
+     *   export class PexRoot { @Run run(ctx) { showHelp(ctx); } }
+     *
+     *   @Command("pex reload")
+     *   export class PexReload { @Run run(ctx) { reload(ctx); } }
+     *
+     *   @Command("pex user")
+     *   export class PexUser {
+     *     @Arg("player", { type: "player" }) player!: Player;
+     *     @Run run(ctx) { showUser(this.player); }
+     *   }
+     *
+     *   @Command("pex user add")
+     *   export class PexUserAdd {
+     *     @Arg("player", { type: "player" }) player!: Player;
+     *     @Arg("perm", { type: "string" }) perm!: string;
+     *     @Run run(ctx) { addPerm(this.player, this.perm); }
+     *   }
+     *
+     * In the tree example, /pex user <player> shows the user, and
+     * /pex user <player> add <perm> grants -- Brigadier sees <player>
+     * exactly once (shared between PexUser and PexUserAdd by arg name).
+     * `add` is a literal child of <player>; if you instead want
+     * /pex user add <player>, swap the path to "pex user add" with
+     * NO @Arg("player") -- the <player> arg becomes part of the add
+     * leaf's own chain.
      */
-    function Command(name: string, opts?: CommandOptions): (target: any, context?: any) => any;
+    function Command(path: string, opts?: CommandOptions): (target: any, context?: any) => any;
 
     /**
      * Declare a typed positional argument. Decorates a class field; the

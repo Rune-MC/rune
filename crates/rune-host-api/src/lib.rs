@@ -95,6 +95,12 @@ pub enum HostCommand {
 
 /// Full description of one user-script command. Marshalled JS-side from the
 /// `@Command` decorator or the `rune.command(...).register()` builder.
+///
+/// The loader sits between the JS-side encoder and the Kotlin-side decoder;
+/// it deserialises into this struct via ciborium then re-serialises into
+/// the drain buffer. **Any field not declared here is silently dropped on
+/// round-trip.** New JS fields MUST be reflected here or they vanish before
+/// the host plugin ever sees them.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CommandSpec {
     pub name: String,
@@ -106,7 +112,17 @@ pub struct CommandSpec {
     pub aliases: Vec<String>,
     #[serde(default)]
     pub args: Vec<CommandArg>,
+    /// Nested literal subcommands. The decorator API aggregates leaves
+    /// across `@Command("pex user add")` classes; the host walks this tree
+    /// to build the Brigadier registration.
+    #[serde(default)]
+    pub subcommands: Vec<CommandSpec>,
+    /// False when this node only branches into subcommands (no `@Run`).
+    #[serde(default = "default_true")]
+    pub has_executor: bool,
 }
+
+fn default_true() -> bool { true }
 
 /// One positional Brigadier argument. `type_` is a tag the Kotlin side maps
 /// to a Paper `ArgumentType`:
@@ -143,6 +159,18 @@ pub struct CommandArg {
     /// that stops before this node). Optional args must come after required.
     #[serde(default)]
     pub optional: bool,
+    /// Static tab-completion suggestions (prefix-filtered by Brigadier).
+    /// Empty when the script registered a dynamic suggester instead.
+    #[serde(default)]
+    pub suggestions: Vec<String>,
+    /// When set, brigadier invokes a JS-side callback via the proxy bridge
+    /// instead of using the static `suggestions` list. JS-allocated id.
+    #[serde(default)]
+    pub suggester_id: Option<u64>,
+    /// Subcommands that branch AFTER this arg slot. Each entry is a literal
+    /// child of the arg node in Brigadier.
+    #[serde(default)]
+    pub subcommands: Vec<CommandSpec>,
 }
 
 fn default_arg_type() -> String { "string".to_string() }
@@ -309,4 +337,25 @@ pub trait LanguageRuntime {
     /// non-`QueryFn` channel (e.g. an FFI C pointer stored in a C++ shim).
     /// JS/deno backends ignore this -- they share `QueryFn` via Rc clones.
     fn set_query_callback(&mut self, _cb: QueryCallback) {}
+
+    /// Synchronously invoke a JS-installed proxy method.
+    ///
+    /// Backends that don't support guest-side `implement(...)` return
+    /// `RuntimeError::Other(...)`. Used by the Java -> JS direction so
+    /// the Kotlin plugin can hand a Java callback (e.g. a ByteBuddy-
+    /// generated `PlaceholderExpansion` subclass) back to JS.
+    ///
+    /// `args` is a CBOR-encoded array of arguments; the result is a
+    /// CBOR-encoded JS value. Both ends agree on the encoding via the
+    /// `EventMarshaller` (Kotlin) / `EncodeCborValue` (C++).
+    fn invoke_js_proxy(
+        &mut self,
+        _proxy_id: u64,
+        _method_name: &str,
+        _args: &[u8],
+    ) -> Result<Vec<u8>, RuntimeError> {
+        Err(RuntimeError::Other(
+            "invoke_js_proxy not supported by this backend".into(),
+        ))
+    }
 }

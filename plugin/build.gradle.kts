@@ -24,6 +24,12 @@ dependencies {
     // startup so we can auto-register a forwarder for each one.
     implementation("io.github.classgraph:classgraph:4.8.179")
 
+    // Runtime bytecode generation -- powers `rune.implement(class, methods)`
+    // which subclasses arbitrary Java abstract classes / implements
+    // interfaces from JS. Used e.g. to register PAPI PlaceholderExpansions
+    // without hardcoding PAPI knowledge in the plugin.
+    implementation("net.bytebuddy:byte-buddy:1.15.10")
+
     implementation(kotlin("stdlib"))
 }
 

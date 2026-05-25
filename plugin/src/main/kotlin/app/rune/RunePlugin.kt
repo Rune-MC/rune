@@ -91,6 +91,20 @@ class RunePlugin : JavaPlugin() {
             // sees a live callback.
             loader.installQueryHandler(QueryHandler(refs, marshaller, this, depLoaders))
 
+            // Bridge for Java -> JS proxy dispatch (used by `rune.implement`).
+            // ByteBuddy-generated subclasses route their intercepted methods
+            // through JsProxyDispatcher, which needs:
+            //   * loader.invokeJsProxy to reach the JS handler table
+            //   * marshaller to box Java call args into Bukkit-ref snapshots
+            //   * refRegistry so the JS return value can resolve refs back
+            JsProxyDispatcher.install(
+                JsProxyDispatcher.Bridge(
+                    invoker = { id, name, args -> loader.invokeJsProxy(id, name, args) },
+                    marshaller = marshaller,
+                    registry = refs,
+                ),
+            )
+
             // Script-defined commands collect into this registry as scripts
             // call rune.command(...) / @Command. The Brigadier lifecycle
             // handler reads it AFTER onEnable returns -- see registerAdminCommands.
@@ -123,6 +137,10 @@ class RunePlugin : JavaPlugin() {
     }
 
     override fun onDisable() {
+        // Drop the proxy bridge before tearing the loader down -- otherwise
+        // a stray PAPI call during shutdown could still hit a half-freed
+        // backend via the cached invoker closure.
+        JsProxyDispatcher.uninstall()
         native?.close()
         native = null
         logger.info("Rune disabled.")

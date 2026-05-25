@@ -82,6 +82,29 @@ typedef ptrdiff_t (*rune_query_callback)(const uint8_t* query,
 
 void rune_node_set_query_callback(RuneNode* rn, rune_query_callback cb);
 
+// ---------------------------------------------------------------------------
+// Reverse-direction sync bridge: Java -> JS proxy invocation.
+//
+// `rune.implement(className, methods)` (JS) sends a `create_proxy` HostQuery
+// so the Kotlin plugin can ByteBuddy-subclass `className` and register a
+// fresh proxy_id. Each generated method later calls back through this entry
+// to look up + invoke the registered JS function for (proxy_id, method).
+//
+// `args` is a CBOR-encoded array of the call arguments (already wrapped as
+// Bukkit refs by Kotlin's EventMarshaller where appropriate). The JS handler
+// runs synchronously inside the V8 isolate; its return value is CBOR-encoded
+// into `out`. Bytes written returned; `-1` if `cap` too small (caller
+// retries with a larger buffer); `-2` on internal failure (e.g. dispatch
+// root not registered yet, isolate teardown in flight).
+// ---------------------------------------------------------------------------
+ptrdiff_t rune_node_invoke_js_proxy(RuneNode* rn,
+                                    uint64_t proxy_id,
+                                    const char* method_name,
+                                    const uint8_t* args,
+                                    size_t args_len,
+                                    uint8_t* out,
+                                    size_t cap);
+
 #ifdef __cplusplus
 }  // extern "C"
 #endif
