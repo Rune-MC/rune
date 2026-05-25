@@ -421,7 +421,7 @@ checksum = "dc897dd8d9e8bd1ed8cdad82b5966c3e0ecae09fb1907d58efaa013543185d0a"
 
 [[package]]
 name = "rune-host-api"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "ciborium",
  "serde",
@@ -431,7 +431,7 @@ dependencies = [
 
 [[package]]
 name = "rune-loader"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "ciborium",
  "env_logger",
@@ -443,7 +443,7 @@ dependencies = [
 
 [[package]]
 name = "rune-runtime-node"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "cc",
  "ciborium",
