@@ -155,12 +155,28 @@ jobs:
   publish:
     name: publish release
     needs: build
+    # Run even if some matrix entries failed/were cancelled, so the
+    # platforms that DID build still get released. You can always re-run
+    # the failed build job later and `gh release upload` the missing
+    # tarballs into the same release.
+    if: always() && !cancelled() && needs.build.result != 'skipped'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/download-artifact@v4
         with:
           path: artifacts
           merge-multiple: true
+
+      - name: Sanity check -- at least one tarball
+        shell: bash
+        run: |
+          count=$(ls artifacts/*.tar.gz 2>/dev/null | wc -l)
+          if [ "$count" -eq 0 ]; then
+            echo "::error::no artifacts to publish (all matrix entries failed)"
+            exit 1
+          fi
+          echo "Publishing $count platform tarball(s):"
+          ls artifacts/*.tar.gz
 
       - name: Build checksums.json
         shell: bash
