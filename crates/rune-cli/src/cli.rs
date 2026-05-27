@@ -48,6 +48,10 @@ pub enum Command {
     /// Bring every installed Rune up to its latest registry version.
     #[command(alias = "upgrade")]
     Update(UpdateArgs),
+
+    /// Self-update the `rune` binary from the project's GitHub releases.
+    #[command(alias = "upgrade-cli", alias = "self-update")]
+    UpdateCli(UpdateCliArgs),
 }
 
 #[derive(Args, Debug)]
@@ -120,6 +124,19 @@ pub struct PublishArgs {
     /// resolver. Drafts are still installable by hash for verification.
     #[arg(long)]
     pub draft: bool,
+
+    /// Publish the rune as private (visible only to the owner / org
+    /// members). Honored only on the FIRST publish — visibility changes
+    /// to existing runes go through the website. Mutually exclusive with
+    /// --public; if neither is set, the registry default (public) wins.
+    #[arg(long, conflicts_with = "public")]
+    pub private: bool,
+
+    /// Explicit opposite of --private — sets the new rune to public.
+    /// Identical to passing nothing (the registry already defaults to
+    /// public), but lets CI scripts be unambiguous.
+    #[arg(long)]
+    pub public: bool,
 }
 
 #[derive(Args, Debug)]
@@ -143,6 +160,14 @@ pub struct AddArgs {
     /// without this flag when the directory already exists.
     #[arg(long)]
     pub force: bool,
+}
+
+#[derive(Args, Debug)]
+pub struct UpdateCliArgs {
+    /// Check for a new release but don't actually install. Useful for
+    /// scripts that want to know whether an upgrade is available.
+    #[arg(long)]
+    pub check: bool,
 }
 
 #[derive(Args, Debug)]

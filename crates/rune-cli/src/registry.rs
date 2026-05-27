@@ -41,6 +41,23 @@ use crate::manifest::Manifest;
 /// identify themselves.
 const UA: &str = concat!("rune-cli/", env!("CARGO_PKG_VERSION"));
 
+/// URL-encode a rune name for use as a single dynamic path segment.
+///
+/// Next.js's `[name]` dynamic segments match exactly one path component;
+/// a literal `/` inside the name (as in `@hylandia/core`) breaks the
+/// match and routes to 404. Percent-encoding the slash as `%2F` puts the
+/// name back into a single component, and Next.js decodes it before
+/// handing the value to the route handler — so on the server side
+/// `params.name` reads back as `@hylandia/core` unchanged.
+///
+/// We also encode `@` for symmetry, even though the apex char is legal
+/// in URL paths — keeps the resulting URL purely ASCII-letter+digit
+/// plus percent escapes, which avoids surprises from any intermediate
+/// proxy that decides to "normalize" the path.
+fn encode_name_segment(name: &str) -> String {
+    name.replace('@', "%40").replace('/', "%2F")
+}
+
 pub struct Client {
     base: url::Url,
     http: reqwest::Client,
@@ -96,9 +113,22 @@ impl Client {
     /// Submit the manifest. The registry checks ownership + version
     /// uniqueness + capability shape, returns signed R2 URLs for every
     /// blob it doesn't already have.
-    pub async fn create_version(&self, manifest: &Manifest) -> Result<CreateVersionResponse> {
-        let url = self.url(&format!("/api/v1/runes/{}/versions", manifest.name))?;
-        let body = CreateVersionRequest { manifest };
+    ///
+    /// `visibility` is honored only on the FIRST publish of a rune —
+    /// subsequent versions inherit whatever was set when the rune was
+    /// created (the registry ignores it on existing runes). Visibility
+    /// changes after first publish go through a separate
+    /// `PATCH /api/v1/runes/:name/visibility` endpoint.
+    pub async fn create_version(
+        &self,
+        manifest: &Manifest,
+        visibility: Option<Visibility>,
+    ) -> Result<CreateVersionResponse> {
+        let url = self.url(&format!(
+            "/api/v1/runes/{}/versions",
+            encode_name_segment(&manifest.name)
+        ))?;
+        let body = CreateVersionRequest { manifest, visibility };
         let resp = self
             .http
             .post(url)
@@ -156,7 +186,10 @@ impl Client {
     /// version is already finalised. Callers that want "publish-or-noop"
     /// behaviour should treat 409 as success.
     pub async fn finalize(&self, name: &str, version: &str) -> Result<FinalizeResponse> {
-        let url = self.url(&format!("/api/v1/runes/{name}/versions/{version}/finalize"))?;
+        let url = self.url(&format!(
+            "/api/v1/runes/{}/versions/{version}/finalize",
+            encode_name_segment(name)
+        ))?;
         let resp = self
             .http
             .post(url)
@@ -175,7 +208,10 @@ impl Client {
     /// to keep new versions out of search results until the author
     /// explicitly re-publishes without the flag.
     pub async fn yank(&self, name: &str, version: &str, reason: &str) -> Result<YankResponse> {
-        let url = self.url(&format!("/api/v1/runes/{name}/versions/{version}/yank"))?;
+        let url = self.url(&format!(
+            "/api/v1/runes/{}/versions/{version}/yank",
+            encode_name_segment(name)
+        ))?;
         let body = YankRequest { reason };
         let resp = self
             .http
@@ -193,7 +229,7 @@ impl Client {
     /// the latest released version. Used by `rune add <name>` (no version
     /// pin) to decide which version to fetch.
     pub async fn get_rune(&self, name: &str) -> Result<RuneSummary> {
-        let url = self.url(&format!("/api/v1/runes/{name}"))?;
+        let url = self.url(&format!("/api/v1/runes/{}", encode_name_segment(name)))?;
         let resp = self
             .http
             .get(url)
@@ -208,7 +244,10 @@ impl Client {
     /// is the raw manifest, not the API envelope, so we deserialize
     /// directly.
     pub async fn get_manifest(&self, name: &str, version: &str) -> Result<Manifest> {
-        let url = self.url(&format!("/api/v1/runes/{name}/v/{version}/manifest"))?;
+        let url = self.url(&format!(
+            "/api/v1/runes/{}/v/{version}/manifest",
+            encode_name_segment(name)
+        ))?;
         let resp = self
             .http
             .get(url)
@@ -371,6 +410,20 @@ pub struct BlobsCheckResponse {
 #[derive(Debug, Serialize)]
 struct CreateVersionRequest<'a> {
     manifest: &'a Manifest,
+    // Omitted from the wire when the caller didn't pass --private/--public;
+    // the registry's default is "public", so leaving the field off matches
+    // pre-flag behaviour exactly.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    visibility: Option<Visibility>,
+}
+
+/// Mirrors the Zod enum on the website side:
+/// `z.enum(["public", "private"]).optional()`. Lowercased on the wire.
+#[derive(Debug, Clone, Copy, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Visibility {
+    Public,
+    Private,
 }
 
 #[allow(dead_code)]

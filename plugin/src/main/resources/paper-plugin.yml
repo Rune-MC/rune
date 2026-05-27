@@ -1,5 +1,5 @@
 name: Rune
-version: 0.3.2
+version: 0.3.3
 main: app.rune.RunePlugin
 api-version: "1.21"
 author: Rune Project

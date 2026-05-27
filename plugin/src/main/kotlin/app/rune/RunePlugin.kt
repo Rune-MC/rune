@@ -74,7 +74,7 @@ class RunePlugin : JavaPlugin() {
             val depLoaders = wired.loaders
             val depPackages = wired.packages
 
-            val loader = NativeLoader(libPath, scriptsRoot)
+            val loader = NativeLoader(libPath, scriptsRoot, logger)
             native = loader
 
             // Subscription set shared between the executor (writer) and the
@@ -147,26 +147,93 @@ class RunePlugin : JavaPlugin() {
     }
 
     override fun onDisable() {
+        // Time each step so a hang in onDisable shows up as a missing
+        // log line. Without this we'd been chasing the wrong section
+        // (native close) when the actual blocker may live earlier.
+        val t0 = System.nanoTime()
+        fun ms(from: Long) = (System.nanoTime() - from) / 1_000_000
+
         // Stop every HTTP server scripts started via rune.serve BEFORE we
         // drop the JS bridge -- their executor threads might be parked in
         // JsProxyDispatcher waiting on a response, and tearing the bridge
         // out from under them would leak threads.
+        val tHttp = System.nanoTime()
+        logger.info("disable: stopping HTTP servers")
         try { HttpServerRegistry.stopAll() } catch (e: Throwable) {
             logger.warning("HttpServerRegistry.stopAll() threw: ${e.message}")
         }
+        logger.info("disable: stopped HTTP servers in ${ms(tHttp)}ms")
 
         // Drop the proxy bridge before tearing the loader down -- otherwise
         // a stray PAPI call during shutdown could still hit a half-freed
         // backend via the cached invoker closure.
+        val tBridge = System.nanoTime()
+        logger.info("disable: dropping proxy bridge")
         JsProxyDispatcher.uninstall()
+        logger.info("disable: dropped proxy bridge in ${ms(tBridge)}ms")
+
         // Drop the dep-aware class resolver -- any held references to
         // the disabled QueryHandler / dep loaders should go with it.
         ArgCoercer.classResolver = { name ->
             try { Class.forName(name) } catch (_: ClassNotFoundException) { null }
         }
-        native?.close()
+
+        val tNative = System.nanoTime()
+        logger.info("disable: closing native loader (5s watchdog)")
+        val n = native
+        n?.close()
+        logger.info("disable: closed native loader in ${ms(tNative)}ms")
+        val nativeWedged = n?.nativeShutdownTimedOut == true
         native = null
-        logger.info("Rune disabled.")
+
+        if (nativeWedged) {
+            // If close() bailed via the watchdog, the worker thread is
+            // still inside `node::CommonEnvironmentSetup`'s destructor with
+            // V8 worker threads parked behind it. After onDisable returns,
+            // Paper closes our plugin classloader, which on Windows calls
+            // FreeLibrary(librune_loader.dll). That cascades into libnode
+            // unload — which blocks waiting for the very V8 workers our
+            // hung setup.reset() never released. The server appears to
+            // hang at exactly this point in the user's log because no
+            // further plugin-disable lines or world-save output ever
+            // emerge.
+            //
+            // We're already in a server-shutdown sequence (onDisable was
+            // called), so the user has asked for the JVM to die. After a
+            // grace window for any plugin that might still cleanly
+            // shutdown, halt the JVM directly. Runtime.halt skips
+            // shutdown hooks but at this point so does the wedged
+            // classloader close.
+            val haltDelayMs = 15_000L
+            val haltLogger = logger
+            Thread({
+                try { Thread.sleep(haltDelayMs) } catch (_: Throwable) {}
+                // Try the plugin logger first (its appender may still be
+                // alive on the daemon side). If it isn't, the halt below
+                // is the actual signal — the absence of a clean exit was
+                // the bug we're routing around.
+                try {
+                    haltLogger.severe(
+                        "shutdown still alive ${haltDelayMs}ms after Rune disabled — " +
+                        "native teardown is wedged (likely libnode worker threads behind " +
+                        "a stuck FreeEnvironment). Forcing JVM halt."
+                    )
+                } catch (_: Throwable) {
+                    // Logger appenders may be torn down by now; swallow.
+                }
+                Runtime.getRuntime().halt(0)
+            }).apply {
+                isDaemon = true
+                name = "rune-halt-watchdog"
+                start()
+            }
+            logger.warning(
+                "disable: native teardown timed out; halt watchdog armed (${haltDelayMs}ms). " +
+                "Server will force-exit if shutdown doesn't complete on its own."
+            )
+        }
+
+        logger.info("Rune disabled (total ${ms(t0)}ms).")
     }
 
     /**

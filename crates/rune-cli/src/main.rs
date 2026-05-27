@@ -47,6 +47,7 @@ async fn main() -> anyhow::Result<()> {
         Command::Add(args) => commands::add::run(args).await,
         Command::Remove(args) => commands::remove::run(args).await,
         Command::Update(args) => commands::update::run(args).await,
+        Command::UpdateCli(args) => commands::update_cli::run(args).await,
     };
 
     if let Err(err) = result {

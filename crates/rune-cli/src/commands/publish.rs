@@ -29,7 +29,7 @@ use crate::auth;
 use crate::cli::PublishArgs;
 use crate::commands::pack;
 use crate::hash::Hash;
-use crate::registry::Client;
+use crate::registry::{Client, Visibility};
 
 /// How many R2 PUTs to keep in flight at once. R2 happily handles
 /// dozens of parallel uploads; the constraint is the user's upstream
@@ -84,8 +84,19 @@ pub async fn run(args: PublishArgs) -> Result<()> {
     }
 
     // ---- Step 4: submit manifest, learn what we need to upload ----
+    // Visibility is a publish-time-only knob: the registry only respects
+    // it on a brand-new rune. Sending None lets the server keep its
+    // default (public) for unscoped pre-existing runes without us
+    // overstating intent.
+    let visibility = if args.private {
+        Some(Visibility::Private)
+    } else if args.public {
+        Some(Visibility::Public)
+    } else {
+        None
+    };
     let created = client
-        .create_version(&packed.manifest)
+        .create_version(&packed.manifest, visibility)
         .await
         .context("submitting manifest")?;
     let needed_map: HashMap<String, String> = created
@@ -233,6 +244,15 @@ fn confirm_publish(packed: &pack::PackResult, args: &PublishArgs) -> Result<()> 
     }
     if args.draft {
         println!("  {} {}", style("mode:    ").dim(), "draft (yanked on publish)");
+    }
+    if args.private {
+        println!(
+            "  {} {}",
+            style("vis:     ").dim(),
+            style("private (only owner/org members can install)").yellow().bold(),
+        );
+    } else if args.public {
+        println!("  {} {}", style("vis:     ").dim(), "public (explicit)");
     }
     print!("\nPublish? [y/N] ");
     io::stdout().flush().ok();

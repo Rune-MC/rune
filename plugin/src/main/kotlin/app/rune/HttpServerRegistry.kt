@@ -79,7 +79,12 @@ object HttpServerRegistry {
     @JvmStatic
     fun stop(port: Int): Boolean {
         val entry = byPort.remove(port) ?: return false
-        entry.server.stop(1)
+        // `stop(0)` instead of `stop(1)`: don't wait for in-flight
+        // exchanges on shutdown. Their futures are about to be completed
+        // with 503s in `stopAll()` anyway, and we don't want this call
+        // to add even a second of latency to onDisable. The executor
+        // threads are daemon so they get reaped at JVM exit.
+        entry.server.stop(0)
         return true
     }
 
@@ -216,8 +221,15 @@ object HttpServerRegistry {
                 }
                 writeResponse(exchange, response)
             } catch (t: Throwable) {
-                System.err.println("[rune.serve] dispatch failed: ${t.javaClass.simpleName}: ${t.message}")
-                t.printStackTrace(System.err)
+                // Route through the plugin logger so Paper's
+                // PluginAuthorNag doesn't flag a System.err.println.
+                // The logger emits at SEVERE which keeps the trace
+                // visible even in production log filtering.
+                java.util.logging.Logger.getLogger("Rune").log(
+                    java.util.logging.Level.SEVERE,
+                    "rune.serve dispatch failed: ${t.javaClass.simpleName}: ${t.message}",
+                    t,
+                )
                 try { writePlain(exchange, 500, "Internal Server Error") } catch (_: Throwable) {}
             } finally {
                 pending.remove(requestId)

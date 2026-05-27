@@ -8,4 +8,5 @@ pub mod pkg_manager;
 pub mod publish;
 pub mod remove;
 pub mod update;
+pub mod update_cli;
 pub mod whoami;

@@ -10,6 +10,7 @@ import java.lang.invoke.MethodHandle
 import java.lang.invoke.MethodHandles
 import java.lang.invoke.MethodType
 import java.nio.file.Path
+import java.util.logging.Logger
 
 /**
  * Panama FFM bindings for `librune_loader`. Mirrors the C ABI documented in
@@ -21,7 +22,11 @@ import java.nio.file.Path
  * Threading: all methods must be called on the Paper main thread (the loader
  * is single-threaded per `DESIGN_SPEC.md` §7).
  */
-class NativeLoader(libraryPath: Path, scriptsDir: Path) : AutoCloseable {
+class NativeLoader(
+    libraryPath: Path,
+    scriptsDir: Path,
+    private val logger: Logger = Logger.getLogger("Rune"),
+) : AutoCloseable {
 
     private val libArena: Arena = Arena.ofShared()
     private val lookup: SymbolLookup = SymbolLookup.libraryLookup(libraryPath, libArena)
@@ -237,6 +242,15 @@ class NativeLoader(libraryPath: Path, scriptsDir: Path) : AutoCloseable {
         }
     }
 
+    /**
+     * Whether the most recent close() bailed out via the watchdog timeout
+     * rather than completing a clean native teardown. Callers (RunePlugin)
+     * read this to decide whether to escalate to a JVM halt — see
+     * [RunePlugin.onDisable] for the rationale.
+     */
+    var nativeShutdownTimedOut: Boolean = false
+        private set
+
     override fun close() {
         // The native teardown chain ends in `node::CommonEnvironmentSetup`'s
         // destructor, which calls `FreeEnvironment` and tries to gracefully
@@ -265,17 +279,18 @@ class NativeLoader(libraryPath: Path, scriptsDir: Path) : AutoCloseable {
         worker.start()
 
         val finished = nativeDone.await(watchdogMs, java.util.concurrent.TimeUnit.MILLISECONDS)
-        if (!finished) {
-            // The native side is wedged in FreeEnvironment / a stuck libuv
-            // handle close. Log it and proceed so Bukkit's shutdown can
-            // continue past this plugin's onDisable.
-            System.err.println(
-                "[rune] native shutdown did not finish within ${watchdogMs}ms; " +
-                "abandoning it as a daemon. The JVM exit will reap remaining handles."
+        if (finished) {
+            logger.info("close: native shutdown completed cleanly")
+        } else {
+            nativeShutdownTimedOut = true
+            logger.warning(
+                "close: native shutdown did not finish within ${watchdogMs}ms; " +
+                "abandoning as daemon (RunePlugin will arm the halt watchdog)"
             )
             // Skip libArena.close(): if the native side is still using the
             // library lookup arena (function descriptors, symbol pointers),
-            // closing it now would SIGSEGV the daemon thread.
+            // closing it now would block (shared arena cooperates with
+            // active downcall threads) or SIGSEGV the daemon thread.
             return
         }
         libArena.close()
