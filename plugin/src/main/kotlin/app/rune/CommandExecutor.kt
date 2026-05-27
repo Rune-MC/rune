@@ -6,8 +6,12 @@ import java.util.logging.Level
 
 /**
  * Per-tick task that pumps each backend's internal scheduler, drains queued
- * host commands, and applies them via Bukkit. Runs only on the Paper main
- * thread (Bukkit calls require it).
+ * host commands, and applies them via Bukkit. Scheduled on the global
+ * region scheduler so the same code path works under both vanilla Paper
+ * (where there's still a single main thread) and Folia (where the global
+ * region thread serialises cross-region work). Folia removed
+ * Bukkit.getScheduler() entirely; using globalRegionScheduler is the
+ * forward-compatible API on both servers.
  */
 class CommandExecutor(
     private val plugin: JavaPlugin,
@@ -17,7 +21,9 @@ class CommandExecutor(
 ) : Runnable {
 
     fun start() {
-        plugin.server.scheduler.runTaskTimer(plugin, this, 1L, 1L)
+        // The Consumer<ScheduledTask> parameter is ignored; we only need
+        // the side effect of `run()`.
+        plugin.server.globalRegionScheduler.runAtFixedRate(plugin, { _ -> run() }, 1L, 1L)
     }
 
     override fun run() {

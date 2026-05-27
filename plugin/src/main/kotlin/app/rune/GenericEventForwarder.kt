@@ -66,7 +66,13 @@ class GenericEventForwarder(
             if (Bukkit.isPrimaryThread()) {
                 dispatch(event)
             } else {
-                plugin.server.scheduler.runTask(plugin) { _ -> dispatch(event) }
+                // GlobalRegionScheduler works on both vanilla Paper (main
+                // thread) and Folia (global region thread). On Folia
+                // isPrimaryThread() returns false for every region thread,
+                // so this defer path is always taken — which is the
+                // correct, serialised place to invoke the single-threaded
+                // JS runtime.
+                Bukkit.getGlobalRegionScheduler().run(plugin) { _ -> dispatch(event) }
             }
         }
         plugin.server.pluginManager.registerEvent(

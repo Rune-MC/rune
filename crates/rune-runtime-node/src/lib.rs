@@ -954,10 +954,17 @@ globalThis.rune.gui = function (spec, init) {
 };
 
 // ---------------------------------------------------------------------------
-// rune.runOnMain(fn) -- promote a JS function call onto Bukkit's main tick
-// and return a Promise that resolves with its return value (or rejects if
-// the function throws). Safe to call from any thread; uses BukkitScheduler
-// underneath. Critical for HTTP handlers that need to touch world state.
+// rune.runOnMain(fn) -- promote a JS function call onto a Bukkit-managed
+// thread and return a Promise that resolves with its return value (or
+// rejects if the function throws). Safe to call from any thread.
+//
+// Uses Bukkit.getGlobalRegionScheduler() rather than the legacy
+// BukkitScheduler so the same code works on both vanilla Paper (1.20.6+)
+// and Folia. On Paper "main thread" is one thread; on Folia "global
+// region thread" serialises cross-region work. The JS runtime is
+// single-threaded either way, so global is the right place to land.
+//
+// Critical for HTTP handlers that need to touch world state.
 // ---------------------------------------------------------------------------
 
 let _runePluginCache = null;
@@ -970,14 +977,17 @@ function _runeGetPlugin() {
 
 globalThis.rune.runOnMain = function (fn) {
   return new Promise((resolve, reject) => {
-    const runnable = rune.implement('java.lang.Runnable', {
-      run: () => {
+    // GlobalRegionScheduler.run takes a Consumer<ScheduledTask>, not a
+    // Runnable. We ignore the task arg — it's only useful for cancellation,
+    // which Promise users don't have a handle on anyway.
+    const consumer = rune.implement('java.util.function.Consumer', {
+      accept: () => {
         try { resolve(fn()); }
         catch (err) { reject(err); }
       },
     });
     try {
-      bukkit.Bukkit.getScheduler().runTask(_runeGetPlugin(), runnable);
+      bukkit.Bukkit.getGlobalRegionScheduler().run(_runeGetPlugin(), consumer);
     } catch (e) {
       reject(e);
     }
