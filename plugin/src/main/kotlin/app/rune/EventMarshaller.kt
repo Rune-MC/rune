@@ -25,7 +25,22 @@ import java.util.UUID
  * marshal -- e.g. `Player` -> `{type, name, uuid}`. Method calls back to
  * the live Bukkit object are the proxy work coming in a later release.
  */
-class EventMarshaller(private val registry: RefRegistry) {
+class EventMarshaller(
+    private val registry: RefRegistry,
+    /**
+     * Extra package-name prefixes that should be treated as "API packages"
+     * for the wrap-vs-stringify decision. Populated from `rune.jsonc`
+     * plugin deps -- so a script that declares `Vault` (net.milkbowl.vault)
+     * gets live proxies for returns that implement an Economy interface
+     * in that package, instead of `toString()` strings. Without this,
+     * third-party plugin objects (Vault Economy providers, Towny residents,
+     * LuckPerms users, ...) all stringify and become unusable from script.
+     *
+     * Each prefix is matched as `name.startsWith(prefix + ".")` (or `== prefix`),
+     * same shape as the hard-coded Bukkit/Paper/Kyori/NMS allowlist below.
+     */
+    private val additionalApiPackages: List<String> = emptyList(),
+) {
 
     private val plain = PlainTextComponentSerializer.plainText()
 
@@ -93,8 +108,27 @@ class EventMarshaller(private val registry: RefRegistry) {
         null -> null
         is String, is Boolean -> value
         is Byte, is Short, is Int, is Long, is Float, is Double -> value
+        // ByteArray is a Kotlin PRIMITIVE array (byte[] under the hood) --
+        // it doesn't match `is Array<*>` below and would otherwise fall
+        // into the generic ref-wrap. Pass it through so EventEncoder
+        // emits a CBOR byte string and JS sees a Uint8Array. Required
+        // for HTTP request bodies, file IO, hash bytes, etc.
+        is ByteArray -> value
         is UUID -> value.toString()
         is Enum<*> -> value.name
+
+        // `Class<?>` returns get a `{__static: name}` envelope so the JS
+        // side can revive it as a `staticClass(name)` JavaClass proxy --
+        // the same shape `rune.javaClass(...)` produces -- so reflective
+        // chains like `reg.getService()` actually return a usable class
+        // ref instead of a `toString()` string. The Java <-> JS round trip
+        // matches the JS->Java encoding: a JavaClass proxy serialises back
+        // as `{__static: name}`, which ArgCoercer unwraps to a real
+        // `java.lang.Class` for Class<?> overload resolution.
+        is Class<*> -> mapOf(
+            "__static" to value.name,
+            "__class" to "Class",
+        )
 
         is Component -> mapOf(
             // Components are refs so users can call .color/.clickEvent/etc.
@@ -198,11 +232,16 @@ class EventMarshaller(private val registry: RefRegistry) {
 
     private fun isApiClass(c: Class<*>): Boolean {
         val n = c.name
-        return n.startsWith("org.bukkit.") ||
+        if (n.startsWith("org.bukkit.") ||
             n.startsWith("io.papermc.paper.") ||
             n.startsWith("com.destroystokyo.paper.") ||
             n.startsWith("net.kyori.") ||
             n.startsWith("net.minecraft.")
+        ) return true
+        for (prefix in additionalApiPackages) {
+            if (n == prefix || n.startsWith("$prefix.")) return true
+        }
+        return false
     }
 
     /**

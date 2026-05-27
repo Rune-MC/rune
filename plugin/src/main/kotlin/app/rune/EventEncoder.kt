@@ -44,6 +44,12 @@ object EventEncoder {
         is Long -> intToCbor(value)
         is Float -> SinglePrecisionFloat(value)
         is Double -> DoublePrecisionFloat(value)
+        // ByteArray gets its own CBOR byte string (major 0x40); without
+        // this case it would fall through to `Object.toString()` which
+        // produces "[B@1a2b3c4d" garbage. The JS side decodes byte strings
+        // into Uint8Array, which is what HTTP request bodies, file IO,
+        // and crypto callbacks all want.
+        is ByteArray -> co.nstant.`in`.cbor.model.ByteString(value)
         is Map<*, *> -> {
             val m = CborMap()
             for ((k, v) in value) {

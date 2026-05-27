@@ -225,6 +225,17 @@ function reviveRefs(value) {
   if (typeof value.__ref === 'number') {
     return wrapRef(value);
   }
+  // {__static: "<FQN>"}: a returned Java `Class<?>` value. Wrap as the
+  // same JavaClass proxy `rune.javaClass(...)` and the package proxies
+  // produce, so chains like `reg.getService().getName()` (which now
+  // returns a usable proxy instead of a `toString()` string) hit
+  // statics on the class. Also closes the JS->Java round trip --
+  // passing this back as an arg to a Java method that expects
+  // Class<?> re-encodes as the same `{__static}` envelope, which
+  // ArgCoercer unwraps server-side.
+  if (typeof value.__static === 'string' && value.__class === 'Class') {
+    return staticClass(value.__static);
+  }
   return value;
 }
 
@@ -674,23 +685,15 @@ globalThis.rune.item = function (material) {
         if (state.customModelData != null) meta.setCustomModelData(state.customModelData);
         if (state.flags.length > 0) {
           // ItemMeta.addItemFlags(ItemFlag...) -- reflection sees the
-          // signature as ItemFlag[], so build a Java array of the right
-          // component type rather than passing a single value (which
-          // would fail "no matching addItemFlags(1 arg(s))").
-          const ItemFlagClass = java.lang.Class.forName('org.bukkit.inventory.ItemFlag');
-          const resolved = state.flags
-            .map((flag) => rune.getStatic('org.bukkit.inventory.ItemFlag', flag))
-            .filter((f) => f != null);
-          if (resolved.length > 0) {
-            const arr = java.lang.reflect.Array.newInstance(
-              ItemFlagClass,
-              resolved.length,
-            );
-            for (let i = 0; i < resolved.length; i++) {
-              java.lang.reflect.Array.set(arr, i, resolved[i]);
-            }
-            meta.addItemFlags(arr);
-          }
+          // signature as ItemFlag[]. ArgCoercer's `arg is Array &&
+          // paramType.isArray` branch builds a real Java array of the
+          // right component type and coerces each entry (here, an enum
+          // name string) to ItemFlag, so we can just hand it a JS
+          // array of strings. The earlier `Array.newInstance + Array.set`
+          // path fought a self-inflicted bug: the host re-marshals every
+          // Java array it returns as a JS list, so the `arr` we got back
+          // wasn't a Java array anymore by the time `Array.set` saw it.
+          meta.addItemFlags(state.flags.filter((f) => typeof f === 'string'));
         }
         if (state.skullOwner != null) {
           // SkullMeta extends ItemMeta -- if the material isn't a head,
@@ -949,6 +952,770 @@ globalThis.rune.gui = function (spec, init) {
   if (typeof init === 'function') init(gui);
   return gui;
 };
+
+// ---------------------------------------------------------------------------
+// rune.runOnMain(fn) -- promote a JS function call onto Bukkit's main tick
+// and return a Promise that resolves with its return value (or rejects if
+// the function throws). Safe to call from any thread; uses BukkitScheduler
+// underneath. Critical for HTTP handlers that need to touch world state.
+// ---------------------------------------------------------------------------
+
+let _runePluginCache = null;
+function _runeGetPlugin() {
+  if (_runePluginCache) return _runePluginCache;
+  _runePluginCache = rune.bukkit.getPluginManager().getPlugin('Rune');
+  if (!_runePluginCache) throw new Error('rune: host plugin not found');
+  return _runePluginCache;
+}
+
+globalThis.rune.runOnMain = function (fn) {
+  return new Promise((resolve, reject) => {
+    const runnable = rune.implement('java.lang.Runnable', {
+      run: () => {
+        try { resolve(fn()); }
+        catch (err) { reject(err); }
+      },
+    });
+    try {
+      bukkit.Bukkit.getScheduler().runTask(_runeGetPlugin(), runnable);
+    } catch (e) {
+      reject(e);
+    }
+  });
+};
+
+// ---------------------------------------------------------------------------
+// rune.serve({ port, host?, executor?, timeoutMs? }, init) -- HTTP server.
+//
+//   const server = rune.serve({ port: 8080 }, (app) => {
+//     app.get('/api/players', async (c) => c.json(await listPlayers()));
+//     app.post('/api/players/:uuid/promote', async (c) => {
+//       const uuid = c.param('uuid');
+//       const { track } = await c.req.json();
+//       return c.json({ uuid, track });
+//     });
+//     app.serveStatic('/', { root: './web/dist', spaFallback: 'index.html' });
+//   });
+//
+// The Java side (HttpServerRegistry) listens, dispatches each request as
+// CBOR to our dispatch proxy, then waits on a CompletableFuture keyed by
+// requestId. The dispatch handler here decodes the request, runs the
+// user's async handler, then calls HttpServerRegistry.respond(...) to
+// wake the parked Java thread.
+//
+// app.framework(prefix, { root, outDir?, install?, rebuild? }) is a sugar
+// helper that builds a JS framework (Vite / Next static export / etc.)
+// inside `root` (relative to script cwd) on first load, then serves the
+// build output via serveStatic with SPA fallback.
+// ---------------------------------------------------------------------------
+
+const _runeServers = new Map(); // port -> { close }
+const _runeSpaExtensions = new Set([
+  '.html', '.js', '.mjs', '.cjs', '.css', '.json', '.png', '.jpg', '.jpeg',
+  '.gif', '.svg', '.webp', '.ico', '.woff', '.woff2', '.ttf', '.otf', '.eot',
+  '.map', '.txt', '.xml', '.wasm', '.mp3', '.mp4', '.webm', '.pdf',
+]);
+
+const _runeMimeByExt = {
+  '.html': 'text/html; charset=utf-8',
+  '.htm':  'text/html; charset=utf-8',
+  '.css':  'text/css; charset=utf-8',
+  '.js':   'application/javascript; charset=utf-8',
+  '.mjs':  'application/javascript; charset=utf-8',
+  '.json': 'application/json; charset=utf-8',
+  '.txt':  'text/plain; charset=utf-8',
+  '.xml':  'application/xml; charset=utf-8',
+  '.svg':  'image/svg+xml',
+  '.png':  'image/png',
+  '.jpg':  'image/jpeg',
+  '.jpeg': 'image/jpeg',
+  '.gif':  'image/gif',
+  '.webp': 'image/webp',
+  '.ico':  'image/x-icon',
+  '.woff': 'font/woff',
+  '.woff2': 'font/woff2',
+  '.ttf':  'font/ttf',
+  '.otf':  'font/otf',
+  '.wasm': 'application/wasm',
+  '.map':  'application/json; charset=utf-8',
+};
+
+function _runeMimeOf(filePath) {
+  const i = filePath.lastIndexOf('.');
+  if (i < 0) return 'application/octet-stream';
+  const ext = filePath.slice(i).toLowerCase();
+  return _runeMimeByExt[ext] || 'application/octet-stream';
+}
+
+globalThis.rune.serve = function (opts, init) {
+  if (!opts || typeof opts.port !== 'number') {
+    throw new TypeError('rune.serve: opts.port (number) is required');
+  }
+  const port = opts.port | 0;
+  const host = opts.host || '0.0.0.0';
+  const threads = (opts.executor && (opts.executor.threads | 0)) || 8;
+  const timeoutMs = (opts.timeoutMs | 0) || 30000;
+
+  // Capture the calling script's directory at the rune.serve() call site.
+  // process.cwd() is the scripts/ root for every script, so relative paths
+  // like "./web" would otherwise resolve to scripts/web instead of the
+  // calling script's own web subdir. Walk the stack to find the first
+  // frame that lives inside a real script file (not the embedded bootstrap).
+  const _serveScriptDir = _runeCallerScriptDir();
+
+  // Routing tables -- populated by init(app) below.
+  const routes = []; // {method, segments, handler}
+  const staticMounts = []; // {prefix, root, spaFallback}
+
+  function addRoute(method, path, handler) {
+    routes.push({ method: method.toUpperCase(), segments: _runeParsePath(path), handler });
+  }
+
+  const app = {
+    get:    (p, h) => (addRoute('GET',    p, h), app),
+    post:   (p, h) => (addRoute('POST',   p, h), app),
+    put:    (p, h) => (addRoute('PUT',    p, h), app),
+    patch:  (p, h) => (addRoute('PATCH',  p, h), app),
+    delete: (p, h) => (addRoute('DELETE', p, h), app),
+    all:    (p, h) => (addRoute('*',      p, h), app),
+    fallback(handler) { _runeFallback = handler; return app; },
+    serveStatic(prefix, options) {
+      if (!options || !options.root) {
+        throw new TypeError('app.serveStatic(prefix, { root, spaFallback? }) requires root');
+      }
+      const path = require('node:path');
+      const base = _serveScriptDir || process.cwd();
+      const absRoot = path.isAbsolute(options.root)
+        ? options.root
+        : path.resolve(base, options.root);
+      staticMounts.push({
+        prefix: prefix === '/' ? '' : (prefix.endsWith('/') ? prefix.slice(0, -1) : prefix),
+        root: absRoot,
+        spaFallback: options.spaFallback || null,
+      });
+      return app;
+    },
+    framework(pathOrOpts, maybeOptions) {
+      // Flexible signature -- the first string arg is treated as a ROOT
+      // path unless it looks like a URL mount prefix (single "/" or a
+      // path that doesn't start with "." / non-dot relative):
+      //   app.framework("./web")                              root="./web", mount="/"
+      //   app.framework("./web", { dev: true, devPort: 3001 }) root="./web", mount="/", merged opts
+      //   app.framework({ root: "./web", dev: true })         root="./web", mount="/"
+      //   app.framework("/admin", { root: "./web" })          mount="/admin", root="./web"
+      let prefix, options;
+      const looksLikeMountPrefix = (s) =>
+        s === '/' || (s.startsWith('/') && !s.startsWith('/./') && !s.startsWith('/../'));
+
+      if (typeof pathOrOpts === 'string') {
+        if (looksLikeMountPrefix(pathOrOpts)) {
+          prefix = pathOrOpts;
+          options = maybeOptions || {};
+        } else {
+          // Path-style arg becomes the root; mount at "/" unless opts override.
+          prefix = '/';
+          options = { ...(maybeOptions || {}), root: pathOrOpts };
+        }
+      } else if (pathOrOpts && typeof pathOrOpts === 'object') {
+        prefix = '/';
+        options = pathOrOpts;
+      } else {
+        throw new TypeError(
+          'app.framework: expected (root) | (opts) | (root, opts) | (prefix, opts)',
+        );
+      }
+      if (!options.root) {
+        throw new TypeError(
+          'app.framework: `root` is required (pass as first arg or in opts)',
+        );
+      }
+      _runeFrameworkQueue.push({ prefix, options, scriptDir: _serveScriptDir });
+      return app;
+    },
+  };
+
+  let _runeFallback = null;
+  const _runeFrameworkQueue = [];
+
+  // Dispatch proxy: Java calls into this for every request. Args arrive
+  // pre-decoded by the bridge marshaller (headers is a plain object, body
+  // is a Uint8Array). We return null immediately; the user's async handler
+  // resolves separately and calls respond(requestId, ...) to wake Java.
+  const dispatcher = rune.implement('app.rune.HttpRequestDispatcher', {
+    dispatch: (requestId, method, path, query, headers, body, remote) => {
+      const req = { requestId, method, path, query, headers, body, remote };
+      Promise.resolve()
+        .then(() => _runeHandleRequest(req, routes, staticMounts, _runeFallback))
+        .then((response) => {
+          const out = _runeNormalizeForWire(response);
+          rune.callStatic(
+            'app.rune.HttpServerRegistry', 'respond',
+            req.requestId, out.status, JSON.stringify(out.headers), out.body,
+          );
+        })
+        .catch((err) => {
+          const stack = err && err.stack ? String(err.stack) : String(err);
+          const bodyStr = process.env.NODE_ENV === 'production' ? 'Internal Server Error' : stack;
+          rune.callStatic(
+            'app.rune.HttpServerRegistry', 'respond',
+            req.requestId, 500,
+            JSON.stringify({ 'Content-Type': 'text/plain; charset=utf-8' }),
+            new TextEncoder().encode(bodyStr),
+          );
+        });
+      return null;
+    },
+  });
+
+  // Hand off to Java. __runeProxyId is a string (stringified u64) so it
+  // round-trips losslessly through CBOR.
+  rune.callStatic(
+    'app.rune.HttpServerRegistry',
+    'start',
+    port,
+    host,
+    threads,
+    dispatcher.__runeProxyId,
+    timeoutMs,
+  );
+
+  // Now run init() -- routes / static mounts / framework decls land in the
+  // tables above. Promise so init can be async (framework build).
+  const initPromise = Promise.resolve()
+    .then(() => init && init(app))
+    .then(async () => {
+      for (const { prefix, options, scriptDir } of _runeFrameworkQueue) {
+        await _runeBuildFramework(prefix, options, staticMounts, scriptDir);
+      }
+    })
+    .catch((err) => {
+      console.error('rune.serve init failed: ' + (err && err.stack || err));
+    });
+
+  const server = {
+    close() {
+      rune.callStatic('app.rune.HttpServerRegistry', 'stop', port);
+      _runeServers.delete(port);
+    },
+    ready: initPromise,
+  };
+  _runeServers.set(port, server);
+  return server;
+};
+
+function _runeParsePath(p) {
+  return String(p).replace(/^\//, '').split('/').filter(Boolean).map((seg) => {
+    if (seg.startsWith(':')) return { kind: 'param', name: seg.slice(1) };
+    if (seg === '*') return { kind: 'wildcard' };
+    return { kind: 'literal', text: seg };
+  });
+}
+
+function _runeNormalizeForWire(response) {
+  // Body normalisation: string -> bytes via TextEncoder; Uint8Array /
+  // ArrayBuffer -> bytes; null/undefined -> empty; everything else ->
+  // JSON.stringify-d into bytes.
+  const headers = { ...(response.headers || {}) };
+  let body = response.body;
+  if (body == null) {
+    body = new Uint8Array(0);
+  } else if (typeof body === 'string') {
+    body = new TextEncoder().encode(body);
+  } else if (body instanceof Uint8Array) {
+    // already bytes
+  } else if (body instanceof ArrayBuffer) {
+    body = new Uint8Array(body);
+  } else {
+    if (!headers['Content-Type'] && !headers['content-type']) {
+      headers['Content-Type'] = 'application/json; charset=utf-8';
+    }
+    body = new TextEncoder().encode(JSON.stringify(body));
+  }
+  return { status: (response.status | 0) || 200, headers, body };
+}
+
+async function _runeHandleRequest(req, routes, staticMounts, fallback) {
+  const url = new URL('http://x' + req.path + (req.query ? '?' + req.query : ''));
+  const pathname = url.pathname;
+
+  // 1. Try registered routes.
+  for (const r of routes) {
+    if (r.method !== '*' && r.method !== req.method) continue;
+    const match = _runeMatch(r.segments, pathname);
+    if (!match) continue;
+    const ctx = _runeMakeContext(req, url, match.params);
+    try {
+      const result = await r.handler(ctx);
+      return _runeNormalize(result, ctx);
+    } catch (e) {
+      throw e;
+    }
+  }
+
+  // 2. Try static mounts (longest prefix wins).
+  const mounts = staticMounts.slice().sort((a, b) => b.prefix.length - a.prefix.length);
+  for (const m of mounts) {
+    if (!pathname.startsWith(m.prefix || '/') && m.prefix !== '') continue;
+    const sub = m.prefix ? pathname.slice(m.prefix.length) : pathname;
+    const served = await _runeServeStaticFile(m.root, sub, m.spaFallback);
+    if (served) return served;
+  }
+
+  // 3. Fallback handler.
+  if (fallback) {
+    const ctx = _runeMakeContext(req, url, {});
+    const result = await fallback(ctx);
+    return _runeNormalize(result, ctx);
+  }
+
+  return { status: 404, headers: { 'Content-Type': 'text/plain; charset=utf-8' }, body: 'Not Found' };
+}
+
+function _runeMatch(segments, pathname) {
+  const parts = pathname.replace(/^\//, '').split('/').filter(Boolean);
+  if (segments.length === 0 && parts.length === 0) return { params: {} };
+  const params = {};
+  let i = 0;
+  for (const seg of segments) {
+    if (seg.kind === 'wildcard') {
+      params['*'] = parts.slice(i).join('/');
+      return { params };
+    }
+    if (i >= parts.length) return null;
+    if (seg.kind === 'literal') {
+      if (seg.text !== parts[i]) return null;
+    } else if (seg.kind === 'param') {
+      params[seg.name] = decodeURIComponent(parts[i]);
+    }
+    i++;
+  }
+  if (i !== parts.length) return null;
+  return { params };
+}
+
+function _runeMakeContext(req, url, params) {
+  const queryParams = new URLSearchParams(req.query || '');
+  const headers = req.headers || {};
+  const bodyBytes = req.body instanceof Uint8Array ? req.body : new Uint8Array(req.body || []);
+
+  const fetchRequest = {
+    method: req.method,
+    url: url.toString(),
+    headers,
+    json: async () => {
+      if (bodyBytes.byteLength === 0) {
+        throw new Error('request body is empty (expected JSON)');
+      }
+      const text = new TextDecoder().decode(bodyBytes);
+      try {
+        return JSON.parse(text);
+      } catch (e) {
+        const head = text.length > 80 ? text.slice(0, 80) + '…' : text;
+        throw new Error('invalid JSON body: ' + ((e && e.message) || e) + ' (got: ' + JSON.stringify(head) + ')');
+      }
+    },
+    text: async () => new TextDecoder().decode(bodyBytes),
+    arrayBuffer: async () => bodyBytes.buffer.slice(bodyBytes.byteOffset, bodyBytes.byteOffset + bodyBytes.byteLength),
+    bytes: () => bodyBytes,
+  };
+
+  return {
+    req: fetchRequest,
+    param: (n) => params[n],
+    params,
+    query: (n) => queryParams.get(n),
+    json: (data, status = 200, extra) => ({
+      status,
+      headers: { 'Content-Type': 'application/json; charset=utf-8', ...(extra || {}) },
+      body: JSON.stringify(data),
+    }),
+    text: (str, status = 200, extra) => ({
+      status,
+      headers: { 'Content-Type': 'text/plain; charset=utf-8', ...(extra || {}) },
+      body: String(str),
+    }),
+    html: (str, status = 200, extra) => ({
+      status,
+      headers: { 'Content-Type': 'text/html; charset=utf-8', ...(extra || {}) },
+      body: String(str),
+    }),
+    redirect: (location, status = 302) => ({
+      status,
+      headers: { Location: location },
+      body: '',
+    }),
+    notFound: (body = 'Not Found') => ({
+      status: 404,
+      headers: { 'Content-Type': 'text/plain; charset=utf-8' },
+      body,
+    }),
+  };
+}
+
+function _runeNormalize(result, ctx) {
+  if (result == null) return { status: 204, headers: {}, body: '' };
+  if (typeof result === 'string') return ctx.text(result);
+  if (result && typeof result === 'object' && 'status' in result && 'headers' in result) return result;
+  // Anything else -> JSON.
+  return ctx.json(result);
+}
+
+async function _runeServeStaticFile(root, sub, spaFallback) {
+  const fs = require('node:fs/promises');
+  const path = require('node:path');
+  const abs = path.join(root, sub.replace(/^\//, ''));
+  // Prevent path traversal: normalised path must stay within root.
+  const resolvedRoot = path.resolve(root);
+  const resolvedAbs = path.resolve(abs);
+  if (!resolvedAbs.startsWith(resolvedRoot)) return null;
+
+  let target = resolvedAbs;
+  try {
+    const st = await fs.stat(target);
+    if (st.isDirectory()) {
+      target = path.join(target, 'index.html');
+      await fs.stat(target);
+    }
+  } catch (_) {
+    // Not found. If the request looks like a client-side route AND we have
+    // an SPA fallback, serve that. Otherwise return null so caller can
+    // continue to the next mount / 404.
+    if (!spaFallback) return null;
+    const ext = path.extname(sub).toLowerCase();
+    if (ext && _runeSpaExtensions.has(ext)) return null; // asset 404, don't fallback
+    target = path.resolve(root, spaFallback);
+    try { await fs.stat(target); }
+    catch (_) { return null; }
+  }
+
+  const data = await fs.readFile(target);
+  return {
+    status: 200,
+    headers: {
+      'Content-Type': _runeMimeOf(target),
+      'Cache-Control': 'public, max-age=3600',
+    },
+    body: new Uint8Array(data.buffer, data.byteOffset, data.byteLength),
+  };
+}
+
+async function _runeBuildFramework(prefix, options, staticMounts, scriptDir) {
+  const path = require('node:path');
+  const fs = require('node:fs/promises');
+  // Resolve relative paths against the calling script's directory, NOT
+  // process.cwd() (which is the shared scripts/ root).
+  const base = scriptDir || process.cwd();
+  const root = path.isAbsolute(options.root || '.')
+    ? options.root
+    : path.resolve(base, options.root || '.');
+  const installFlag = options.install !== false;
+
+  if (options.dev) {
+    // Dev mode: spawn the framework's dev server as a background process
+    // and DON'T mount static. The dev server owns its own port; HMR uses
+    // WebSocket which JDK HttpServer can't proxy. Users hit the dev URL
+    // directly; their vite.config.ts `server.proxy` should forward
+    // /api/* to this Rune port. On /rune reload the dev server is kept
+    // alive across script reloads (we probe the port and skip respawn).
+    const devPort = (options.devPort | 0) || 5173;
+    const devScript = options.devCommand || 'dev';
+
+    if (await _runeDevPortInUse(devPort)) {
+      console.info(
+        '[rune.framework] reusing existing dev server at http://localhost:' + devPort,
+      );
+    } else {
+      const pm = await _runeDetectPackageManager(root);
+      if (installFlag) {
+        const nm = path.join(root, 'node_modules');
+        try { await fs.stat(nm); }
+        catch (_) {
+          console.info('[rune.framework] ' + pm + ' install in ' + root);
+          await _runeSpawn(pm, ['install'], root);
+        }
+      }
+      console.info(
+        '[rune.framework] spawning ' + pm + ' run ' + devScript +
+        ' in ' + root + ' (HMR on :' + devPort + ')',
+      );
+      _runeSpawnDevServer(pm, ['run', devScript], root, devPort);
+    }
+    console.info(
+      '[rune.framework] open http://localhost:' + devPort +
+      ' for the dev UI -- API still on Rune\'s port. ' +
+      'Configure your dev server\'s proxy (vite.config.ts server.proxy) ' +
+      'to forward /api/* to this Rune port for same-origin API calls.',
+    );
+    return;
+  }
+
+  // Production: build + mount static.
+  const outDir = options.outDir || 'dist';
+  const buildScript = options.buildCommand || 'build';
+  const rebuild = options.rebuild || 'missing'; // 'missing' | 'always' | 'never'
+  const spaFallback = options.spaFallback === false ? null : (options.spaFallback || 'index.html');
+  const outPath = path.join(root, outDir);
+
+  let needsBuild = rebuild === 'always';
+  if (!needsBuild && rebuild !== 'never') {
+    try { await fs.stat(path.join(outPath, spaFallback || 'index.html')); }
+    catch (_) { needsBuild = true; }
+  }
+
+  if (needsBuild) {
+    const pm = await _runeDetectPackageManager(root);
+    if (installFlag) {
+      const nm = path.join(root, 'node_modules');
+      try { await fs.stat(nm); }
+      catch (_) {
+        console.info('[rune.framework] ' + pm + ' install in ' + root);
+        await _runeSpawn(pm, ['install'], root);
+      }
+    }
+    console.info('[rune.framework] ' + pm + ' run ' + buildScript + ' in ' + root);
+    await _runeSpawn(pm, ['run', buildScript], root);
+  } else {
+    console.info('[rune.framework] using cached build at ' + outPath);
+  }
+
+  staticMounts.push({
+    prefix: prefix === '/' ? '' : (prefix.endsWith('/') ? prefix.slice(0, -1) : prefix),
+    root: outPath,
+    spaFallback,
+  });
+}
+
+async function _runeDevPortInUse(port) {
+  // Probe BOTH IPv4 and IPv6 -- Vite tends to bind ::1 on Windows, so an
+  // IPv4-only probe returns false even when something is listening.
+  return (await _runeProbeHost(port, '127.0.0.1')) ||
+    (await _runeProbeHost(port, '::1'));
+}
+
+function _runeProbeHost(port, host) {
+  const net = require('node:net');
+  return new Promise((resolve) => {
+    const sock = net.connect({ port, host }, () => {
+      sock.end();
+      resolve(true);
+    });
+    sock.setTimeout(300);
+    sock.once('timeout', () => { sock.destroy(); resolve(false); });
+    sock.once('error', () => resolve(false));
+  });
+}
+
+/**
+ * Find every PID listening on `port` on the local machine. Empty array
+ * if nothing's there. Used as the discovery step before we kill-and-retry
+ * a dev-server spawn that hit EADDRINUSE.
+ */
+function _runeFindPortHolders(port) {
+  const { execSync } = require('node:child_process');
+  try {
+    if (process.platform === 'win32') {
+      const out = execSync('netstat -ano -p TCP', { encoding: 'utf8' });
+      const pids = new Set();
+      for (const line of out.split(/\r?\n/)) {
+        // Match lines like "  TCP    0.0.0.0:3001  0.0.0.0:0  LISTENING  1234"
+        // or "  TCP    [::]:3001  [::]:0  LISTENING  1234"
+        if (!line.includes('LISTENING')) continue;
+        if (!new RegExp(':' + port + '\\b').test(line)) continue;
+        const m = line.match(/(\d+)\s*$/);
+        if (m) pids.add(parseInt(m[1], 10));
+      }
+      return [...pids].filter((p) => p > 0 && p !== process.pid);
+    } else {
+      const out = execSync('lsof -ti tcp:' + port, { encoding: 'utf8' });
+      return out
+        .split(/\r?\n/)
+        .map((s) => parseInt(s.trim(), 10))
+        .filter((p) => Number.isFinite(p) && p > 0 && p !== process.pid);
+    }
+  } catch {
+    return [];
+  }
+}
+
+function _runeKillPids(pids) {
+  const { execSync } = require('node:child_process');
+  for (const pid of pids) {
+    try {
+      if (process.platform === 'win32') {
+        execSync('taskkill /F /PID ' + pid, { stdio: 'ignore' });
+      } else {
+        process.kill(pid, 'SIGKILL');
+      }
+      console.info('[rune.framework] killed PID ' + pid + ' holding the dev port');
+    } catch (e) {
+      console.warn(
+        '[rune.framework] failed to kill PID ' + pid + ': ' +
+        ((e && e.message) || e),
+      );
+    }
+  }
+}
+
+/**
+ * Spawn the framework dev server with one retry: if the child exits
+ * non-zero within ~3s (almost always EADDRINUSE), find whoever is on
+ * the port, kill them, and respawn once. Beyond that we give up so a
+ * broken script can't loop us into killing things forever.
+ */
+function _runeSpawnDevServer(cmd, args, cwd, port) {
+  let attempts = 0;
+  const trySpawn = () => {
+    attempts++;
+    const startedAt = Date.now();
+    _runeSpawnBackground(cmd, args, cwd, (code) => {
+      // Callback fires on exit. Quick crash + non-zero -> likely port conflict.
+      if (attempts >= 2 || code === 0 || code === null) return;
+      if (Date.now() - startedAt > 5000) return;
+      const holders = _runeFindPortHolders(port);
+      if (holders.length === 0) return;
+      console.warn(
+        '[rune.framework] dev server crashed on :' + port +
+        ' -- freeing the port and retrying once. PID(s): ' + holders.join(', '),
+      );
+      _runeKillPids(holders);
+      setTimeout(trySpawn, 400);
+    });
+  };
+  trySpawn();
+}
+
+function _runeSpawnBackground(cmd, args, cwd, onExit) {
+  const { spawn } = require('node:child_process');
+  const onWindows = process.platform === 'win32';
+  const finalCmd = onWindows && /^(npm|pnpm|yarn)$/i.test(cmd)
+    ? cmd + '.cmd'
+    : cmd;
+  try {
+    // Pipe stdio (don't inherit) -- otherwise Vite / Webpack / Next see a
+    // TTY and emit cursor-move + clear-screen escapes that hijack the
+    // Minecraft server console. Piped, they fall back to plain log lines.
+    // We then forward each line through our logger so it still shows up,
+    // prefixed so users can tell what's emitting it.
+    const proc = spawn(finalCmd, args, {
+      cwd,
+      shell: onWindows,
+      stdio: ['ignore', 'pipe', 'pipe'],
+      windowsHide: true,
+      env: {
+        ...process.env,
+        // Strip env hints that make tools think they're in a TTY anyway.
+        FORCE_COLOR: '0',
+        NO_COLOR: '1',
+        CI: '1',
+        TERM: 'dumb',
+      },
+    });
+    proc.unref();
+
+    const prefix = '[' + cmd + ']';
+    const forward = (stream, log) => {
+      let buf = '';
+      stream.setEncoding('utf8');
+      stream.on('data', (chunk) => {
+        buf += chunk;
+        let idx;
+        while ((idx = buf.indexOf('\n')) >= 0) {
+          const line = buf.slice(0, idx).replace(/\r$/, '');
+          buf = buf.slice(idx + 1);
+          // Drop ANSI cursor / clear sequences just in case the tool
+          // emits them anyway despite TERM=dumb (some don't honour it).
+          const clean = line.replace(/\x1b\[[0-9;?]*[A-Za-z]/g, '');
+          if (clean) log(prefix + ' ' + clean);
+        }
+      });
+    };
+    forward(proc.stdout, (m) => console.info(m));
+    forward(proc.stderr, (m) => console.warn(m));
+
+    proc.once('error', (e) => {
+      console.warn('[rune.framework] dev server error: ' + (e && e.message || e));
+    });
+    proc.once('exit', (code, sig) => {
+      if (code !== 0 && code !== null) {
+        console.warn('[rune.framework] dev server exited (code ' + code + ')');
+      } else if (sig) {
+        console.info('[rune.framework] dev server exited (signal ' + sig + ')');
+      }
+      if (typeof onExit === 'function') {
+        try { onExit(code); } catch {}
+      }
+    });
+  } catch (e) {
+    console.warn('[rune.framework] dev server spawn failed: ' + (e && e.message || e));
+  }
+}
+
+async function _runeDetectPackageManager(root) {
+  const fs = require('node:fs/promises');
+  const path = require('node:path');
+  const has = async (f) => { try { await fs.stat(path.join(root, f)); return true; } catch { return false; } };
+  if (await has('pnpm-lock.yaml')) return 'pnpm';
+  if (await has('bun.lockb') || await has('bun.lock')) return 'bun';
+  if (await has('yarn.lock')) return 'yarn';
+  return 'npm';
+}
+
+function _runeSpawn(cmd, args, cwd) {
+  const { spawn } = require('node:child_process');
+  return new Promise((resolve, reject) => {
+    // Windows: npm / pnpm / yarn ship as `.cmd` shims, not real .exe files,
+    // so spawning them without a shell or without the extension fails with
+    // ENOENT. Use the `.cmd` variant explicitly on win32 + skip shell:true
+    // (which can lose the cwd in some libnode-embedded environments).
+    const onWindows = process.platform === 'win32';
+    // Windows: npm / pnpm / yarn ship as `.cmd` shims, so spawn fails
+    // without the extension. Bun ships as a native `bun.exe`, so we let
+    // PATHEXT resolve it via shell instead of forcing `.cmd`.
+    const finalCmd = onWindows && /^(npm|pnpm|yarn)$/i.test(cmd)
+      ? cmd + '.cmd'
+      : cmd;
+    const proc = spawn(finalCmd, args, {
+      cwd,
+      shell: onWindows, // shell needed on win32 for .cmd resolution via PATHEXT
+      stdio: 'inherit',
+      windowsHide: true,
+    });
+    proc.once('exit', (code) => {
+      if (code === 0) resolve(undefined);
+      else reject(new Error(finalCmd + ' ' + args.join(' ') + ' exited with ' + code));
+    });
+    proc.once('error', reject);
+  });
+}
+
+/**
+ * Walk the V8 stack to find the first frame whose source path looks like
+ * a real script file (not the embedded bootstrap, which V8 reports under
+ * the host binary's name -- usually "java.exe"). Returns the dirname of
+ * that file, or null if nothing matches.
+ *
+ * Used by `rune.serve` to capture the calling script's directory so
+ * relative paths in `app.framework("./web")` / `app.serveStatic` resolve
+ * against the script's location instead of the shared scripts/ cwd.
+ */
+function _runeCallerScriptDir() {
+  const path = require('node:path');
+  const err = new Error();
+  const stack = err.stack || '';
+  // Match either "(path:line:col)" or "at path:line:col" frames. Path can
+  // be Windows ("C:\foo\bar.ts") or POSIX ("/foo/bar.ts"); accepts .ts,
+  // .mjs, .js extensions. We skip frames whose path includes "java.exe"
+  // (the bootstrap fake-filename) and any without an extension we care
+  // about.
+  const re = /(?:\(|at\s+)([A-Za-z]:[\\/][^():\n]+?\.(?:ts|mjs|cjs|js)|\/[^():\n]+?\.(?:ts|mjs|cjs|js)):\d+:\d+\)?/g;
+  let m;
+  while ((m = re.exec(stack)) != null) {
+    const file = m[1];
+    if (file.includes('java.exe')) continue;
+    return path.dirname(file);
+  }
+  return null;
+}
 
 // ---------------------------------------------------------------------------
 // @EventHandler / @Listener decorators. Sugar over `rune.on(...)`.

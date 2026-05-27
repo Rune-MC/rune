@@ -331,7 +331,174 @@ interface RuneApi {
         className: string,
         methods: Record<string, (...args: any[]) => unknown>,
     ): T;
+
+    /**
+     * Schedule `fn` onto Bukkit's main thread (the tick loop) and return
+     * a Promise that resolves with its return value. Use this from
+     * `rune.serve` handlers, async callbacks, or anywhere off-main when
+     * you need to touch Bukkit state safely.
+     *
+     *   const players = await rune.runOnMain(() => rune.bukkit.getOnlinePlayers());
+     *
+     * Errors thrown inside `fn` reject the Promise -- no silent swallow.
+     */
+    runOnMain<T>(fn: () => T): Promise<T>;
+
+    /**
+     * Start an HTTP server backed by the JDK's `com.sun.net.httpserver`.
+     * Runs on its own thread pool, completely off the tick loop.
+     *
+     *   const server = rune.serve({ port: 8080 }, (app) => {
+     *     app.get("/api/players", async (c) => c.json(await listPlayers()));
+     *     app.post("/api/players/:uuid/promote", async (c) => {
+     *       const { track } = await c.req.json();
+     *       const player = await rune.runOnMain(
+     *         () => rune.bukkit.getPlayer(c.param("uuid")),
+     *       );
+     *       return c.json(await attemptPromote(player, track));
+     *     });
+     *     app.serveStatic("/", { root: "./web/dist", spaFallback: "index.html" });
+     *   });
+     *
+     * Handlers can be `async`. Each request is dispatched to JS via the
+     * proxy bridge; the user handler's resolved Response is sent back to
+     * the parked Java thread via `HttpServerRegistry.respond(...)`.
+     */
+    serve(opts: ServeOptions, init?: (app: ServeApp) => void | Promise<void>): Server;
 }
+
+declare global {
+
+interface ServeOptions {
+    /** TCP port to bind on. Required. */
+    port: number;
+    /** Bind address. Default `0.0.0.0`. */
+    host?: string;
+    /** Per-request timeout in ms before Rune writes 504. Default 30000. */
+    timeoutMs?: number;
+    /** Executor sizing. */
+    executor?: { threads?: number };
+}
+
+/** Returned from `rune.serve(...)`. */
+interface Server {
+    /** Stop the listener + drain in-flight requests. */
+    close(): void;
+    /** Resolves when init() (incl. any `app.framework` build) finishes. */
+    readonly ready: Promise<void>;
+}
+
+/** The `app` object passed to `rune.serve`'s init callback. */
+interface ServeApp {
+    get(path: string, handler: ServeHandler): ServeApp;
+    post(path: string, handler: ServeHandler): ServeApp;
+    put(path: string, handler: ServeHandler): ServeApp;
+    patch(path: string, handler: ServeHandler): ServeApp;
+    delete(path: string, handler: ServeHandler): ServeApp;
+    /** Matches any method. */
+    all(path: string, handler: ServeHandler): ServeApp;
+    /** Final handler when nothing else matches. */
+    fallback(handler: ServeHandler): ServeApp;
+    /**
+     * Mount a directory of static files at `prefix`. With `spaFallback`,
+     * any unknown path that doesn't look like an asset (.js / .css / .png
+     * / ...) is served the fallback file -- right shape for React Router /
+     * other client-side routers.
+     */
+    serveStatic(prefix: string, options: ServeStaticOptions): ServeApp;
+    /**
+     * Build + serve a JS framework app (Vite / Next static export / etc.)
+     * inside `root` (relative to the script's cwd). On first load (or
+     * with `rebuild: "always"`), Rune detects the package manager
+     * (pnpm / bun / yarn / npm), runs install if needed, then runs the
+     * build script. Falls through to `serveStatic` of the build output.
+     *
+     *   app.framework("./web");                          // mount at "/"
+     *   app.framework({ root: "./web", outDir: "out" });  // opts only
+     *   app.framework("/admin", { root: "./web" });       // mount at "/admin"
+     */
+    framework(root: string): ServeApp;
+    framework(options: ServeFrameworkOptions): ServeApp;
+    framework(prefix: string, options: ServeFrameworkOptions): ServeApp;
+}
+
+interface ServeStaticOptions {
+    /** Directory of files to serve, relative to the script's cwd. */
+    root: string;
+    /** Filename inside `root` to serve for unmatched SPA-style paths. */
+    spaFallback?: string;
+}
+
+interface ServeFrameworkOptions {
+    /**
+     * Framework project root, relative to the script's cwd. Optional when
+     * the first arg of `app.framework(...)` is a path string -- that path
+     * becomes the root automatically.
+     */
+    root?: string;
+    /**
+     * When true, spawn the framework's dev server (npm run dev / pnpm dev)
+     * as a background process instead of building. HMR works because the
+     * dev server owns its own port. You must hit that port directly for
+     * the UI (Rune can't proxy WebSocket-based HMR through JDK HttpServer).
+     * Configure your dev server's proxy to forward `/api/*` back to this
+     * Rune port for same-origin API calls (vite.config.ts `server.proxy`).
+     *
+     * The dev process is unref'd so it survives `/rune reload` -- Rune
+     * probes the port on next load and reuses the existing process
+     * instead of double-spawning.
+     */
+    dev?: boolean;
+    /** Port the dev server listens on. Default `5173` (Vite's default). */
+    devPort?: number;
+    /** package.json script name to invoke in dev mode. Default `"dev"`. */
+    devCommand?: string;
+    /** Build output directory inside `root`. Default `"dist"`. */
+    outDir?: string;
+    /** package.json script name to invoke in prod mode. Default `"build"`. */
+    buildCommand?: string;
+    /** Run `<pm> install` if `node_modules` is missing. Default `true`. */
+    install?: boolean;
+    /** Build cadence: `"missing"` (only if output missing), `"always"`, or `"never"`. Default `"missing"`. */
+    rebuild?: "missing" | "always" | "never";
+    /** SPA fallback filename, or `false` to disable. Default `"index.html"`. */
+    spaFallback?: string | false;
+}
+
+/** Handler return -- a `Context` helper result or a raw `Response`-shaped object. */
+type ServeHandlerResult =
+    | { status: number; headers: Record<string, string>; body: string | Uint8Array | null }
+    | string
+    | object
+    | null;
+
+type ServeHandler = (c: ServeContext) => ServeHandlerResult | Promise<ServeHandlerResult>;
+
+interface ServeContext {
+    /** Per-request request object (`fetch`-style shape). */
+    readonly req: {
+        method: string;
+        url: string;
+        headers: Record<string, string>;
+        json(): Promise<unknown>;
+        text(): Promise<string>;
+        arrayBuffer(): Promise<ArrayBuffer>;
+        bytes(): Uint8Array;
+    };
+    /** Read a `:name` path param. */
+    param(name: string): string | undefined;
+    /** All path params as an object. */
+    readonly params: Record<string, string>;
+    /** Read a query-string parameter. */
+    query(name: string): string | null;
+    json(data: unknown, status?: number, extraHeaders?: Record<string, string>): ServeHandlerResult;
+    text(str: string, status?: number, extraHeaders?: Record<string, string>): ServeHandlerResult;
+    html(str: string, status?: number, extraHeaders?: Record<string, string>): ServeHandlerResult;
+    redirect(location: string, status?: number): ServeHandlerResult;
+    notFound(body?: string): ServeHandlerResult;
+}
+
+}  // end declare global
 
 interface BukkitStatic {
     broadcastMessage(message: string): number;

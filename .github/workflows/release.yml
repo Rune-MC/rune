@@ -97,14 +97,45 @@ jobs:
           version=$(basename "$src" .jar | sed 's/^rune-//')
           out="plugin/build/libs/rune-${version}-${{ matrix.jar_suffix }}.jar"
           mv "$src" "$out"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
           echo "path=$out" >> "$GITHUB_OUTPUT"
           echo "name=$(basename "$out")" >> "$GITHUB_OUTPUT"
 
-      - name: upload artifact
+      - name: upload jar artifact
         uses: actions/upload-artifact@v4
         with:
           name: ${{ steps.jar.outputs.name }}
           path: ${{ steps.jar.outputs.path }}
+
+      # ---- CLI binary ----
+      # We piggy-back on the same per-platform matrix the plugin jar uses.
+      # `cargo build --release -p rune-cli` produces `target/release/rune[.exe]`;
+      # we rename it with the same version+platform suffix the jar uses so the
+      # install.{ps1,sh} scripts can pull both from one GitHub release.
+      - name: build rune CLI
+        run: cargo build --release -p rune-cli
+
+      - name: stage CLI binary
+        id: cli
+        shell: bash
+        run: |
+          set -e
+          version="${{ steps.jar.outputs.version }}"
+          ext=""
+          if [ "${{ matrix.target }}" = "windows-x64" ]; then ext=".exe"; fi
+          src="target/release/rune${ext}"
+          [ -f "$src" ] || { echo "CLI binary missing at $src"; exit 1; }
+          out_name="rune-cli-${version}-${{ matrix.jar_suffix }}${ext}"
+          out="target/release/${out_name}"
+          mv "$src" "$out"
+          echo "path=$out" >> "$GITHUB_OUTPUT"
+          echo "name=${out_name}" >> "$GITHUB_OUTPUT"
+
+      - name: upload CLI artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.cli.outputs.name }}
+          path: ${{ steps.cli.outputs.path }}
 
   publish:
     name: publish release
@@ -134,6 +165,7 @@ jobs:
           generate_release_notes: true
           files: |
             artifacts/*.jar
+            artifacts/rune-cli-*
             rune-install-${{ github.ref_name }}.zip
           body: |
             ## Install

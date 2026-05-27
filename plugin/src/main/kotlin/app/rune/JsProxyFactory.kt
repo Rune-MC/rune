@@ -169,6 +169,23 @@ object JsProxyDispatcher {
     }
 
     /**
+     * Synchronous helper for code that lives outside the ByteBuddy-generated
+     * dispatch path (e.g. HttpServerRegistry needs to invoke a JS handler
+     * proxy without going through a generated subclass).
+     *
+     * Marshals each arg through EventMarshaller so Bukkit-typed args arrive
+     * in JS as proper ref-wrapped objects. Returns the raw CBOR response
+     * bytes (or null when no bridge is installed).
+     */
+    @JvmStatic
+    fun invokeByProxyId(proxyId: Long, methodName: String, vararg args: Any?): ByteArray? {
+        val b = bridge ?: return null
+        val marshalled = args.toList().map { b.marshaller.marshalValue(it) }
+        val cborArgs = encodeArgsArray(marshalled)
+        return b.invoker(proxyId, methodName, cborArgs)
+    }
+
+    /**
      * Method body for every generated proxy method. Marshals the call
      * args through to JS via the installed invoker, decodes the CBOR
      * response, and coerces it back to the method's declared return type.

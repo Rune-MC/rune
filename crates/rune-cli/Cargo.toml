@@ -1,0 +1,85 @@
+[package]
+name = "rune-cli"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "CLI for the Rune polyglot scripting platform — init, pack, publish."
+
+# The user-facing binary is just `rune`. `cargo build` from the workspace
+# root produces `target/release/rune[.exe]`.
+[[bin]]
+name = "rune"
+path = "src/main.rs"
+
+[dependencies]
+# CLI framework. Derive flavour for compile-time typed subcommands.
+clap = { version = "4", features = ["derive", "wrap_help", "env"] }
+
+# Async runtime. Multi-thread because publish does parallel blob uploads.
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "fs", "process", "io-util", "time"] }
+
+# HTTP client for Runebook API + direct R2 PUTs.
+# rustls-tls so we don't drag OpenSSL onto users' machines.
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "stream"] }
+
+# Manifest serde shape. `preserve_order` keeps the canonical JSON serialiser
+# deterministic when we re-serialise objects mid-pipeline.
+serde = { version = "1", features = ["derive"] }
+serde_json = { version = "1", features = ["preserve_order"] }
+serde_bytes.workspace = true
+
+# rune.toml parser.
+toml = { version = "0.8", features = ["parse"] }
+
+# File walking + globbing. `ignore` already understands .gitignore-style
+# files, which we reuse for .runeignore.
+walkdir = "2"
+ignore = "0.4"
+globset = "0.4"
+
+# Hashing — SHA-256 throughout per SPEC.md §9.
+sha2 = "0.10"
+hex = "0.4"
+
+# Compression + tarball assembly for the offline-review archive view.
+# The registry doesn't consume the tarball directly (it gets the blobs +
+# manifest individually); this is for `rune pack`'s `dist/<name>.tar.zst`
+# output that authors can inspect or distribute out-of-band.
+zstd = { version = "0.13", default-features = false }
+tar = "0.4"
+
+# Errors. `anyhow` everywhere user-visible; `thiserror` for library types
+# that have stable error variants.
+anyhow = "1"
+thiserror.workspace = true
+
+# Logging. Plain CLI output goes through `println!` / `eprintln!`; tracing
+# is for `--verbose` and structured debug logs.
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+# Misc small utilities.
+dirs = "5"                 # ~/.config/rune resolution
+url = "2"                  # base URL handling
+indicatif = "0.17"         # progress bars during publish
+console = "0.15"           # coloured CLI output, terminal detection
+rand = "0.8"               # nonce + retry jitter
+once_cell = "1"            # cached lazy statics
+
+# Semver validation for `version = "..."` in rune.toml.
+semver = { version = "1", features = ["serde"] }
+
+# .env file loading for local dev. `dotenvy::dotenv()` walks up from the
+# current dir looking for a `.env`, so users can drop dev settings (like
+# RUNEBOOK_URL=http://localhost:3000) once per project and forget about
+# them. Existing process env always wins, so CI workflows aren't
+# overridden by an accidentally-committed .env.
+dotenvy = "0.15"
+
+# NOTE: no esbuild here. `rune pack` ships file bytes verbatim — the
+# Rune runtime's own loader esbuild handles TS / JSX / decorators at
+# load time. Transforming at publish would shred installed-source
+# readability and couple every published manifest to a specific
+# loader-target string. If we ever bring back optional pack-time
+# transforms, this is the spot to thread the dep through.

@@ -301,7 +301,16 @@ class QueryHandler(
         return encodeOk(marshalled)
     }
 
-    private fun loadClass(name: String): Class<*>? {
+    private fun loadClass(name: String): Class<*>? = tryLoadClass(name)
+
+    /**
+     * Public class lookup that consults Rune's own classloader followed by
+     * every declared plugin dep loader. Wired into [ArgCoercer.classResolver]
+     * so JavaClass-proxy args (`{__static: name}`) coming from JS can be
+     * resolved back to a real `java.lang.Class` for overloads keyed on
+     * Class<?>. Returns null if no loader has the class.
+     */
+    fun tryLoadClass(name: String): Class<*>? {
         try {
             return Class.forName(name, true, plugin.javaClass.classLoader)
         } catch (_: ClassNotFoundException) { /* try deps */ }

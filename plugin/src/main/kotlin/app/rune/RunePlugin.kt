@@ -70,7 +70,9 @@ class RunePlugin : JavaPlugin() {
             // runtime/aliases.json which the Node bootstrap consumes.
             val config = RuneConfigReader(this).load(scriptsRoot)
             val runtimeDir = dataFolder.toPath().resolve("runtime")
-            val depLoaders = wireConfigArtifacts(config, scriptsRoot, runtimeDir, tsGen)
+            val wired = wireConfigArtifacts(config, scriptsRoot, runtimeDir, tsGen)
+            val depLoaders = wired.loaders
+            val depPackages = wired.packages
 
             val loader = NativeLoader(libPath, scriptsRoot)
             native = loader
@@ -84,12 +86,20 @@ class RunePlugin : JavaPlugin() {
             // scripts can call methods on them via the sync-query channel.
             val refs = RefRegistry()
             refRegistry = refs
-            val marshaller = EventMarshaller(refs)
+            val marshaller = EventMarshaller(refs, depPackages)
 
             // Wire the synchronous-upcall handler before loading any scripts,
             // so a script that does `Bukkit.getOnlinePlayers()` at top level
             // sees a live callback.
-            loader.installQueryHandler(QueryHandler(refs, marshaller, this, depLoaders))
+            val queryHandler = QueryHandler(refs, marshaller, this, depLoaders)
+            loader.installQueryHandler(queryHandler)
+
+            // ArgCoercer needs the same loader chain to unwrap JavaClass
+            // proxy args (`{__static: name}`) back to `java.lang.Class`
+            // for Bukkit overloads keyed on Class<?> (ServicesManager,
+            // PDC types, etc.). Without this the singleton falls back to
+            // `Class.forName(name)` which never sees other plugins' classes.
+            ArgCoercer.classResolver = { name -> queryHandler.tryLoadClass(name) }
 
             // Bridge for Java -> JS proxy dispatch (used by `rune.implement`).
             // ByteBuddy-generated subclasses route their intercepted methods
@@ -137,10 +147,23 @@ class RunePlugin : JavaPlugin() {
     }
 
     override fun onDisable() {
+        // Stop every HTTP server scripts started via rune.serve BEFORE we
+        // drop the JS bridge -- their executor threads might be parked in
+        // JsProxyDispatcher waiting on a response, and tearing the bridge
+        // out from under them would leak threads.
+        try { HttpServerRegistry.stopAll() } catch (e: Throwable) {
+            logger.warning("HttpServerRegistry.stopAll() threw: ${e.message}")
+        }
+
         // Drop the proxy bridge before tearing the loader down -- otherwise
         // a stray PAPI call during shutdown could still hit a half-freed
         // backend via the cached invoker closure.
         JsProxyDispatcher.uninstall()
+        // Drop the dep-aware class resolver -- any held references to
+        // the disabled QueryHandler / dep loaders should go with it.
+        ArgCoercer.classResolver = { name ->
+            try { Class.forName(name) } catch (_: ClassNotFoundException) { null }
+        }
         native?.close()
         native = null
         logger.info("Rune disabled.")
@@ -242,6 +265,11 @@ class RunePlugin : JavaPlugin() {
             // re-register everything as they re-execute.
             refs.clear()
             subs.clear()
+            // rune.serve servers belong to the OLD isolate's handler
+            // proxies; stop them so the rebuilt isolate can re-bind ports.
+            try { HttpServerRegistry.stopAll() } catch (e: Throwable) {
+                logger.warning("HttpServerRegistry.stopAll() threw: ${e.message}")
+            }
 
             // Tear down + rebuild the Node env, then replay every script
             // that was previously loaded.
@@ -266,6 +294,19 @@ class RunePlugin : JavaPlugin() {
         }
     }
 
+    /** Result of [wireConfigArtifacts]. */
+    data class WiredDeps(
+        /** Classloaders consulted when resolving FQNs not on Rune's own loader. */
+        val loaders: List<ClassLoader>,
+        /**
+         * Declared root packages from rune.jsonc. Used by [EventMarshaller]
+         * to recognise third-party plugin returns as wrappable refs (so a
+         * value implementing `net.milkbowl.vault.economy.Economy` gets a
+         * live proxy back in the script, not a `toString()` string).
+         */
+        val packages: List<String>,
+    )
+
     /**
      * Materialise the artifacts driven by `rune.jsonc`:
      *   * Verify each declared plugin is loaded; warn (or SEVERE for
@@ -280,7 +321,7 @@ class RunePlugin : JavaPlugin() {
         scriptsRoot: java.nio.file.Path,
         runtimeDir: java.nio.file.Path,
         tsGen: TsSurfaceGenerator,
-    ): List<ClassLoader> {
+    ): WiredDeps {
         val typesDir = scriptsRoot.resolve("types")
         Files.createDirectories(typesDir)
 
@@ -289,6 +330,7 @@ class RunePlugin : JavaPlugin() {
         // `Class.forName("me.clip.placeholderapi.PlaceholderAPI", ...)`
         // -- Paper plugins don't see each other's classes by default.
         val depLoaders = mutableListOf<ClassLoader>()
+        val depPackages = mutableListOf<String>()
         for ((name, dep) in config.plugins) {
             val present = server.pluginManager.getPlugin(name)
             if (present == null) {
@@ -305,6 +347,7 @@ class RunePlugin : JavaPlugin() {
                 logger.warning("rune.jsonc: plugin '$name' has no `package` field; skipping type generation.")
                 continue
             }
+            depPackages.add(pkg)
             val alias = dep.alias ?: name.lowercase()
             try {
                 val dts = tsGen.generateForPlugin(
@@ -351,7 +394,7 @@ class RunePlugin : JavaPlugin() {
             )
         }
 
-        return depLoaders
+        return WiredDeps(loaders = depLoaders, packages = depPackages)
     }
 
     private fun handleNewScript(sender: CommandSender, name: String, lang: String) {

@@ -144,6 +144,20 @@ object MethodResolver {
 object ArgCoercer {
 
     /**
+     * Resolves an FQN to a `java.lang.Class`. Wired by [RunePlugin] at
+     * enable time to consult both Rune's own classloader and every
+     * declared-plugin classloader (so e.g. `vault.economy.Economy` can
+     * be unwrapped back to a real Class<?> for Bukkit's
+     * `ServicesManager.getRegistration(Class)` overload). Default is a
+     * no-op so the singleton stays usable from unit tests / pre-enable
+     * code paths.
+     */
+    @Volatile
+    var classResolver: (String) -> Class<*>? = { name ->
+        try { Class.forName(name) } catch (_: ClassNotFoundException) { null }
+    }
+
+    /**
      * Generic-type-aware entry point. Used by [MethodResolver] when the
      * caller has a method's `genericParameterTypes[i]` -- preserves the
      * `<E>` on `List<E>` so element coercion can resolve to Components,
@@ -217,6 +231,23 @@ object ArgCoercer {
                 if (obj != null && paramType.isInstance(obj)) {
                     return obj
                 }
+            }
+        }
+
+        // JavaClass proxy: {__static: "<FQN>", ...}. Produced by both
+        // `rune.javaClass(...)` and the package-navigation proxy
+        // (`vault.economy.Economy`). When the called Java method takes
+        // a `Class<?>` (or any superclass like `Object` / `AnnotatedElement`),
+        // resolve the FQN to a real `java.lang.Class` through the plugin's
+        // dep-aware class loader chain. Without this, every Bukkit API
+        // that's keyed on Class identity -- ServicesManager,
+        // PersistentDataContainer types, etc. -- is unreachable from
+        // script land.
+        if (arg is CborMap) {
+            val staticItem = arg[UnicodeString("__static")]
+            if (staticItem is UnicodeString && paramType.isAssignableFrom(Class::class.java)) {
+                val resolved = classResolver(staticItem.string)
+                if (resolved != null) return resolved
             }
         }
 
@@ -298,6 +329,14 @@ object ArgCoercer {
             val y = numberOrNull(arg[UnicodeString("y")])?.toDouble() ?: 0.0
             val z = numberOrNull(arg[UnicodeString("z")])?.toDouble() ?: 0.0
             return Vector(x, y, z)
+        }
+
+        // byte[] from CBOR byte string. JS `Uint8Array` encodes as a CBOR
+        // byte string (not a CBOR array), so the generic `isArray` path
+        // below misses it. Without this, you can't pass binary bodies
+        // (HTTP request bodies, image data, etc.) into Java methods.
+        if (paramType == ByteArray::class.java && arg is co.nstant.`in`.cbor.model.ByteString) {
+            return arg.bytes
         }
 
         // Array (including varargs -- `String...` reflects as `String[]`).
