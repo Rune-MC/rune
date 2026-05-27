@@ -183,53 +183,48 @@ class RunePlugin : JavaPlugin() {
         val n = native
         n?.close()
         logger.info("disable: closed native loader in ${ms(tNative)}ms")
-        val nativeWedged = n?.nativeShutdownTimedOut == true
         native = null
 
-        if (nativeWedged) {
-            // If close() bailed via the watchdog, the worker thread is
-            // still inside `node::CommonEnvironmentSetup`'s destructor with
-            // V8 worker threads parked behind it. After onDisable returns,
-            // Paper closes our plugin classloader, which on Windows calls
-            // FreeLibrary(librune_loader.dll). That cascades into libnode
-            // unload — which blocks waiting for the very V8 workers our
-            // hung setup.reset() never released. The server appears to
-            // hang at exactly this point in the user's log because no
-            // further plugin-disable lines or world-save output ever
-            // emerge.
-            //
-            // We're already in a server-shutdown sequence (onDisable was
-            // called), so the user has asked for the JVM to die. After a
-            // grace window for any plugin that might still cleanly
-            // shutdown, halt the JVM directly. Runtime.halt skips
-            // shutdown hooks but at this point so does the wedged
-            // classloader close.
-            val haltDelayMs = 15_000L
+        // Even when NativeLoader.close() returned cleanly (env::Stop +
+        // setup.reset finished), Paper's post-onDisable cleanup can still
+        // hang the JVM: closing our plugin classloader calls FreeLibrary
+        // on librune_loader.dll which cascades into libnode unload, and
+        // libnode's V8 platform thread pool (created once per process,
+        // never torn down by env destruction) holds the unload open.
+        //
+        // The only reliable escape is a JVM halt watchdog. Arm it on any
+        // shutdown — gated by Server.isStopping() so a deliberate
+        // `/pl disable Rune` on a running server doesn't take the whole
+        // server down with it.
+        val isStopping = try { server.isStopping } catch (_: Throwable) {
+            // Pre-Paper-1.20 fallback: no isStopping API. Assume true,
+            // since onDisable during normal runtime is uncommon.
+            true
+        }
+        if (isStopping) {
+            val haltDelayMs = 30_000L
             val haltLogger = logger
             Thread({
                 try { Thread.sleep(haltDelayMs) } catch (_: Throwable) {}
                 // Try the plugin logger first (its appender may still be
-                // alive on the daemon side). If it isn't, the halt below
-                // is the actual signal — the absence of a clean exit was
-                // the bug we're routing around.
+                // alive on the daemon side). If not, the halt below is
+                // the actual signal we're routing around.
                 try {
                     haltLogger.severe(
-                        "shutdown still alive ${haltDelayMs}ms after Rune disabled — " +
-                        "native teardown is wedged (likely libnode worker threads behind " +
-                        "a stuck FreeEnvironment). Forcing JVM halt."
+                        "JVM still alive ${haltDelayMs}ms after Rune disabled — " +
+                        "likely classloader close blocked on FreeLibrary(libnode) " +
+                        "waiting for V8 platform threads. Forcing JVM halt."
                     )
-                } catch (_: Throwable) {
-                    // Logger appenders may be torn down by now; swallow.
-                }
+                } catch (_: Throwable) { /* logger torn down; swallow */ }
                 Runtime.getRuntime().halt(0)
             }).apply {
                 isDaemon = true
                 name = "rune-halt-watchdog"
                 start()
             }
-            logger.warning(
-                "disable: native teardown timed out; halt watchdog armed (${haltDelayMs}ms). " +
-                "Server will force-exit if shutdown doesn't complete on its own."
+            logger.info(
+                "disable: halt watchdog armed (${haltDelayMs}ms); will force-exit " +
+                "the JVM if Bukkit shutdown stalls past that point."
             )
         }
 

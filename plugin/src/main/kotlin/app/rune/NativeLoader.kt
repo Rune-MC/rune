@@ -287,13 +287,23 @@ class NativeLoader(
                 "close: native shutdown did not finish within ${watchdogMs}ms; " +
                 "abandoning as daemon (RunePlugin will arm the halt watchdog)"
             )
-            // Skip libArena.close(): if the native side is still using the
-            // library lookup arena (function descriptors, symbol pointers),
-            // closing it now would block (shared arena cooperates with
-            // active downcall threads) or SIGSEGV the daemon thread.
-            return
         }
-        libArena.close()
+        // DELIBERATELY do not call libArena.close().
+        //
+        // The shared arena owns the SymbolLookup for librune_loader.dll;
+        // closing it calls FreeLibrary, which on Windows cascades into
+        // FreeLibrary(libnode.dll), which blocks waiting for V8's
+        // platform thread pool to terminate. That pool is initialised
+        // once per process by the C++ shim and isn't torn down by
+        // env::Stop / setup.reset — so we have no graceful way to make
+        // libnode releasable from inside onDisable.
+        //
+        // The cost of skipping close: the arena's memory + the loaded
+        // native libraries stay mapped until JVM exit. Server shutdown
+        // exits the process anyway (the halt watchdog in RunePlugin
+        // guarantees this). Plugin reload-during-runtime would leak the
+        // arena, but `/rune reload` doesn't go through onDisable, so
+        // production reloads aren't affected.
     }
 
     companion object {

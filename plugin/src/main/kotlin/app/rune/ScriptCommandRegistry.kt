@@ -89,48 +89,9 @@ class ScriptCommandRegistry(
                 commands.register(node, spec.description.ifEmpty { null }, spec.aliases)
                 brigadierRegistered.add(spec.name)
                 plugin.logger.info("registered script command /${spec.name}")
-                // Dump the tree so users can debug "where did my subcommand
-                // go?" without printf-debugging the JS bootstrap.
-                plugin.logger.info(describeTree(spec, indent = 1))
             } catch (e: Throwable) {
                 plugin.logger.warning("failed to register command /${spec.name}: ${e.message}")
             }
-        }
-    }
-
-    /**
-     * Human-readable dump of a CommandSpec tree -- used when we register a
-     * command to show admins exactly which subcommands + args + suggesters
-     * landed in Brigadier.
-     */
-    private fun describeTree(spec: CommandSpec, indent: Int): String = buildString {
-        val pad = "  ".repeat(indent)
-        if (spec.args.isNotEmpty()) {
-            for (a in spec.args) {
-                val sug = when {
-                    a.suggesterId != null -> " suggest=dynamic"
-                    a.suggestions.isNotEmpty() -> " suggest=[${a.suggestions.joinToString(",")}]"
-                    else -> ""
-                }
-                append(pad).append("<${a.name}:${a.type}>").append(sug)
-                if (a.subcommands.isNotEmpty()) {
-                    append('\n')
-                    for (sub in a.subcommands) {
-                        append(pad).append("  ").append("|- ").append(sub.name)
-                        if (sub.hasExecutor) append(" [run]")
-                        append('\n')
-                        append(describeTree(sub, indent + 2))
-                    }
-                } else {
-                    append('\n')
-                }
-            }
-        }
-        for (sub in spec.subcommands) {
-            append(pad).append("|- ").append(sub.name)
-            if (sub.hasExecutor) append(" [run]")
-            append('\n')
-            append(describeTree(sub, indent + 1))
         }
     }
 
