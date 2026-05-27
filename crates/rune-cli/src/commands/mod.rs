@@ -4,6 +4,8 @@ pub mod install_dir;
 pub mod login;
 pub mod logout;
 pub mod pack;
+pub mod pkg_manager;
 pub mod publish;
 pub mod remove;
+pub mod update;
 pub mod whoami;

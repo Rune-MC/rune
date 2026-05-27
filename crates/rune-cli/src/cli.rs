@@ -44,6 +44,10 @@ pub enum Command {
     /// Remove an installed Rune from a Minecraft server's scripts folder.
     #[command(alias = "uninstall")]
     Remove(RemoveArgs),
+
+    /// Bring every installed Rune up to its latest registry version.
+    #[command(alias = "upgrade")]
+    Update(UpdateArgs),
 }
 
 #[derive(Args, Debug)]
@@ -139,6 +143,23 @@ pub struct AddArgs {
     /// without this flag when the directory already exists.
     #[arg(long)]
     pub force: bool,
+}
+
+#[derive(Args, Debug)]
+pub struct UpdateArgs {
+    /// Limit the update to a single Rune (matches against the canonical
+    /// name OR the unscoped basename of the install dir). Without it,
+    /// every installed Rune is checked.
+    pub name: Option<String>,
+
+    /// Path to the Minecraft server root or scripts dir. Same resolution
+    /// as `rune add`.
+    #[arg(long, env = "RUNE_SCRIPTS")]
+    pub scripts: Option<PathBuf>,
+
+    /// Override the Runebook registry URL.
+    #[arg(long, env = "RUNEBOOK_URL", default_value = "https://runemc.dev")]
+    pub registry: url::Url,
 }
 
 #[derive(Args, Debug)]

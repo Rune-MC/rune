@@ -238,7 +238,46 @@ class NativeLoader(libraryPath: Path, scriptsDir: Path) : AutoCloseable {
     }
 
     override fun close() {
-        runeShutdown.invoke(handle)
+        // The native teardown chain ends in `node::CommonEnvironmentSetup`'s
+        // destructor, which calls `FreeEnvironment` and tries to gracefully
+        // close every active libuv handle. User-script connections (mongoose
+        // TCP sockets in particular) can park that close indefinitely while
+        // they exchange disconnect packets with a remote that may be gone.
+        //
+        // We're called from RunePlugin.onDisable on server shutdown — the
+        // JVM is about to exit anyway, so a graceful close that takes
+        // longer than the watchdog budget is no better than a hard
+        // abandon. Run the native shutdown on a daemon thread, join with a
+        // bounded wait, and continue regardless. Leaked native memory dies
+        // with the JVM seconds later.
+        val watchdogMs = 5_000L
+        val nativeDone = java.util.concurrent.CountDownLatch(1)
+        val worker = Thread({
+            try {
+                runeShutdown.invoke(handle)
+            } catch (t: Throwable) {
+                // Best-effort cleanup; we're about to lose the process.
+            } finally {
+                nativeDone.countDown()
+            }
+        }, "rune-native-shutdown")
+        worker.isDaemon = true
+        worker.start()
+
+        val finished = nativeDone.await(watchdogMs, java.util.concurrent.TimeUnit.MILLISECONDS)
+        if (!finished) {
+            // The native side is wedged in FreeEnvironment / a stuck libuv
+            // handle close. Log it and proceed so Bukkit's shutdown can
+            // continue past this plugin's onDisable.
+            System.err.println(
+                "[rune] native shutdown did not finish within ${watchdogMs}ms; " +
+                "abandoning it as a daemon. The JVM exit will reap remaining handles."
+            )
+            // Skip libArena.close(): if the native side is still using the
+            // library lookup arena (function descriptors, symbol pointers),
+            // closing it now would SIGSEGV the daemon thread.
+            return
+        }
         libArena.close()
     }
 

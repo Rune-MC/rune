@@ -15,7 +15,7 @@
 //! object or a stale CDN cache could swap content under us.
 
 use std::collections::{HashMap, HashSet};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -27,6 +27,7 @@ use tokio::task::JoinSet;
 
 use crate::cli::AddArgs;
 use crate::commands::install_dir::{self, InstallLock};
+use crate::commands::pkg_manager;
 use crate::config::validate_name;
 use crate::hash::Hash;
 use crate::registry::Client;
@@ -45,21 +46,6 @@ pub async fn run(args: AddArgs) -> Result<()> {
     // ---- 2. Locate scripts dir ----
     let scripts_dir = install_dir::resolve(args.scripts.as_deref())?;
     let target_dir = scripts_dir.join(install_dir::dir_name(&name));
-
-    if target_dir.exists() {
-        if !args.force {
-            bail!(
-                "{} already exists. Re-run with --force to overwrite, or `rune remove {}` first.",
-                target_dir.display(),
-                install_dir::dir_name(&name),
-            );
-        }
-        // --force: remove the old install before laying down the new one.
-        // We don't merge in place — a half-replaced install is worse than
-        // a clean swap.
-        std::fs::remove_dir_all(&target_dir)
-            .with_context(|| format!("clearing {}", target_dir.display()))?;
-    }
 
     // ---- 3. Resolve version ----
     let client = Arc::new(Client::new(args.registry.clone(), String::new())?);
@@ -91,9 +77,67 @@ pub async fn run(args: AddArgs) -> Result<()> {
         style(format!("v{version}")).dim(),
     );
 
-    // ---- 4. Fetch manifest ----
+    install(
+        &client,
+        &name,
+        &version,
+        &target_dir,
+        &args.registry,
+        args.force,
+    )
+    .await?;
+
+    println!();
+    println!(
+        "{} {} {} {}",
+        style("✓").green().bold(),
+        style("Installed").green().bold(),
+        format!("{name}@{version}"),
+        style(format!("→ {}", target_dir.display())).dim(),
+    );
+    println!(
+        "  {} restart your server (or `/rune reload`) to load it.",
+        style("next:").dim(),
+    );
+    Ok(())
+}
+
+/// Lay down a specific version of a named Rune into `target_dir`. Shared
+/// by `rune add` (single install) and `rune update` (bulk replay across
+/// every installed Rune that has a newer version available).
+///
+/// Performs the existing-dir check, manifest fetch + name/version sanity,
+/// parallel verified blob download, file lay-down, lockfile write, and
+/// npm install. Does NOT print the surrounding banner — callers handle
+/// their own framing so update can keep its compact one-line-per-rune
+/// summary.
+pub async fn install(
+    client: &Arc<Client>,
+    name: &str,
+    version: &str,
+    target_dir: &Path,
+    registry: &url::Url,
+    force: bool,
+) -> Result<()> {
+    if target_dir.exists() {
+        if !force {
+            bail!(
+                "{} already exists. Re-run with --force to overwrite, or `rune remove {}` first.",
+                target_dir.display(),
+                install_dir::dir_name(name),
+            );
+        }
+        // --force: remove the old install before laying down the new
+        // one. We don't merge in place — a half-replaced install is
+        // worse than a clean swap. node_modules vanishes with it, which
+        // is fine: pkg_manager::maybe_install will repopulate at the end.
+        std::fs::remove_dir_all(target_dir)
+            .with_context(|| format!("clearing {}", target_dir.display()))?;
+    }
+
+    // ---- Fetch manifest ----
     let manifest = client
-        .get_manifest(&name, &version)
+        .get_manifest(name, version)
         .await
         .with_context(|| format!("fetching manifest for {name}@{version}"))?;
 
@@ -215,14 +259,14 @@ pub async fn run(args: AddArgs) -> Result<()> {
     }
 
     // ---- 6. Lay down files ----
-    std::fs::create_dir_all(&target_dir)
+    std::fs::create_dir_all(target_dir)
         .with_context(|| format!("creating {}", target_dir.display()))?;
 
     for file in &manifest.files {
         let bytes = blobs
             .get(&file.hash.to_wire())
             .ok_or_else(|| anyhow!("internal: blob for {} missing after download", file.path))?;
-        let dest = safe_join(&target_dir, &file.path)?;
+        let dest = safe_join(target_dir, &file.path)?;
         if let Some(parent) = dest.parent() {
             std::fs::create_dir_all(parent)
                 .with_context(|| format!("creating {}", parent.display()))?;
@@ -236,23 +280,18 @@ pub async fn run(args: AddArgs) -> Result<()> {
         name: manifest.name.clone(),
         version: manifest.version.clone(),
         manifest_hash: manifest.hash()?.to_wire(),
-        registry: args.registry.as_str().trim_end_matches('/').to_string(),
+        registry: registry.as_str().trim_end_matches('/').to_string(),
         installed_at: now_rfc3339_ish(),
     };
-    install_dir::write_lock(&target_dir, &lock)?;
+    install_dir::write_lock(target_dir, &lock)?;
 
-    println!();
-    println!(
-        "{} {} {} {}",
-        style("✓").green().bold(),
-        style("Installed").green().bold(),
-        format!("{}@{}", manifest.name, manifest.version),
-        style(format!("→ {}", target_dir.display())).dim(),
-    );
-    println!(
-        "  {} restart your server (or `/rune reload`) to load it.",
-        style("next:").dim(),
-    );
+    // ---- 8. npm deps ----
+    // Many Runes ship a package.json whose `dependencies` (mongoose,
+    // zod, etc.) the runtime resolves at script load. Running the
+    // preferred PM here means the script bootstrap doesn't crash with
+    // "Cannot find module 'mongoose'" on first run.
+    pkg_manager::maybe_install(target_dir)?;
+
     Ok(())
 }
 

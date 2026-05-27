@@ -46,6 +46,7 @@ async fn main() -> anyhow::Result<()> {
         Command::Whoami => commands::whoami::run().await,
         Command::Add(args) => commands::add::run(args).await,
         Command::Remove(args) => commands::remove::run(args).await,
+        Command::Update(args) => commands::update::run(args).await,
     };
 
     if let Err(err) = result {
