@@ -2,6 +2,9 @@ package app.rune
 
 import io.papermc.paper.command.brigadier.Commands
 import io.papermc.paper.plugin.lifecycle.event.types.LifecycleEvents
+import net.kyori.adventure.text.Component
+import net.kyori.adventure.text.format.NamedTextColor
+import net.kyori.adventure.text.format.TextColor
 import org.bukkit.command.CommandSender
 import org.bukkit.plugin.java.JavaPlugin
 import java.nio.file.Files
@@ -298,6 +301,23 @@ class RunePlugin : JavaPlugin() {
                 .build()
             commands.register(root, "Manage the Rune scripting runtime.", listOf("r"))
 
+            // Override /plugins (alias /pl) so it surfaces installed Runes
+            // alongside the regular plugin list. The Rune *plugin* itself
+            // is hidden — it's implied by the Runes section. Last
+            // registration wins in Brigadier, so this displaces Bukkit's
+            // default /plugins for everyone.
+            val pluginsCmd = Commands.literal("plugins")
+                .executes { ctx ->
+                    sendPluginsOverview(ctx.source.sender)
+                    com.mojang.brigadier.Command.SINGLE_SUCCESS
+                }
+                .build()
+            commands.register(
+                pluginsCmd,
+                "Gets a list of installed Runes and plugins.",
+                listOf("pl"),
+            )
+
             // Script-defined Brigadier commands. They were queued by the
             // initial onEnable script load (the COMMANDS lifecycle event
             // fires after onEnable returns, so the queue is populated by
@@ -472,6 +492,106 @@ class RunePlugin : JavaPlugin() {
         }
         sender.sendMessage("§aCreated script: §f${result.created}")
         sender.sendMessage("§7Run §f/rune reload§7 to load it.")
+    }
+
+    /**
+     * Implementation behind our /plugins (alias /pl) override. Two
+     * sections separated by a blank line:
+     *
+     *   1. **Runes** — every subdir under `<dataFolder>/scripts/` that
+     *      carries a `rune.jsonc` (the runtime descriptor) OR a
+     *      `.rune-install.json` (CLI-installed marker). Both indicate a
+     *      "real" rune as opposed to a stray folder.
+     *
+     *   2. **Plugins** — the same comma-separated, color-coded list
+     *      Bukkit's stock /plugins emits, with the Rune host plugin
+     *      hidden (it's implied by the Runes section above).
+     */
+    private fun sendPluginsOverview(sender: CommandSender) {
+        // ---- Runes ----
+        val runeNames = listInstalledRunes()
+        val runeHeader = colored("Runes (${runeNames.size}): ", NamedTextColor.WHITE)
+        val runeBody = if (runeNames.isEmpty()) {
+            colored("none", NamedTextColor.GRAY)
+        } else {
+            // All listed runes are "active" — Rune doesn't load runes it
+            // can't start. Use green to match how /plugins colour-codes
+            // enabled plugins.
+            joinWithCommas(runeNames.map { colored(it, NamedTextColor.GREEN) })
+        }
+        sender.sendMessage(runeHeader.append(runeBody))
+
+        // ---- Plugins (without Rune itself) ----
+        val plugins = server.pluginManager.plugins
+            .filter { it.name != "Rune" }
+            .sortedBy { it.name.lowercase() }
+        val pluginHeader = colored("Plugins (${plugins.size}): ", NamedTextColor.WHITE)
+        val pluginBody = if (plugins.isEmpty()) {
+            colored("none", NamedTextColor.GRAY)
+        } else {
+            joinWithCommas(
+                plugins.map {
+                    colored(
+                        it.name,
+                        if (it.isEnabled) NamedTextColor.GREEN else NamedTextColor.RED,
+                    )
+                }
+            )
+        }
+        sender.sendMessage(pluginHeader.append(pluginBody))
+    }
+
+    /**
+     * Adventure's `Component.text(String, TextColor)` isn't in our
+     * version (only `text(String, Style)`). This wraps the equivalent
+     * `text(content).color(c)` so call sites stay readable.
+     */
+    private fun colored(text: String, color: TextColor): Component =
+        Component.text(text).color(color)
+
+    /**
+     * Enumerate active runes by walking the immediate children of
+     * `<dataFolder>/scripts/` and keeping directories that look like a
+     * rune. We accept two markers:
+     *
+     *   * `rune.jsonc` — local-dev / authored-in-place runes.
+     *   * `.rune-install.json` — runes installed via `rune add`.
+     *
+     * Either indicates "this folder is a real rune, not random
+     * scratch". Returns names sorted case-insensitively.
+     */
+    private fun listInstalledRunes(): List<String> {
+        val root = scriptsDir ?: return emptyList()
+        if (!Files.isDirectory(root)) return emptyList()
+        val out = mutableListOf<String>()
+        Files.list(root).use { stream ->
+            for (entry in stream) {
+                if (!Files.isDirectory(entry)) continue
+                val name = entry.fileName.toString()
+                if (name.startsWith(".") || name == "node_modules") continue
+                val looksLikeRune =
+                    Files.isRegularFile(entry.resolve("rune.jsonc")) ||
+                    Files.isRegularFile(entry.resolve(".rune-install.json"))
+                if (looksLikeRune) out += name
+            }
+        }
+        out.sortBy { it.lowercase() }
+        return out
+    }
+
+    /**
+     * Builds a single `A, B, C` Component from a list of styled
+     * fragments, preserving each fragment's colour but using grey
+     * commas as separators to match Bukkit's /plugins formatting.
+     */
+    private fun joinWithCommas(parts: List<Component>): Component {
+        if (parts.isEmpty()) return Component.empty()
+        var out = parts.first()
+        val sep = colored(", ", NamedTextColor.GRAY)
+        for (p in parts.drop(1)) {
+            out = out.append(sep).append(p)
+        }
+        return out
     }
 
     private fun handleStatus(sender: CommandSender, @Suppress("unused_parameter") loader: NativeLoader) {
