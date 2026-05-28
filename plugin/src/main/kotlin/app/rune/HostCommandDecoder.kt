@@ -5,6 +5,7 @@ import co.nstant.`in`.cbor.model.Array as CborArray
 import co.nstant.`in`.cbor.model.Map as CborMap
 import co.nstant.`in`.cbor.model.Number as CborNumber
 import co.nstant.`in`.cbor.model.UnicodeString
+import org.bukkit.event.EventPriority
 
 /**
  * Decodes the CBOR payload produced by `rune_drain_commands` -- a CBOR array
@@ -40,10 +41,21 @@ object HostCommandDecoder {
                     level = map.getString("level") ?: "info",
                     message = map.getString("message") ?: "",
                 )
-                "subscribe_event" -> HostCommand.SubscribeEvent(
-                    name = map.getString("name")
+                "subscribe_event" -> {
+                    val name = map.getString("name")
                         ?: throw IllegalArgumentException("subscribe_event missing 'name'")
-                )
+                    // Older JS bootstraps may not include `priority`; default
+                    // to NORMAL to match Bukkit's @EventHandler default.
+                    val priority = map.getString("priority")?.let { raw ->
+                        try { EventPriority.valueOf(raw.uppercase()) }
+                        catch (_: IllegalArgumentException) {
+                            throw IllegalArgumentException(
+                                "subscribe_event 'priority' must be one of ${EventPriority.values().joinToString()}, got '$raw'"
+                            )
+                        }
+                    } ?: EventPriority.NORMAL
+                    HostCommand.SubscribeEvent(name = name, priority = priority)
+                }
                 "register_command" -> HostCommand.RegisterCommand(decodeCommandSpec(map))
                 else -> throw IllegalArgumentException("unknown op: $op")
             }

@@ -1012,9 +1012,15 @@ void JS_RegisterCommand(const v8::FunctionCallbackInfo<v8::Value>& args) {
   EnqueueCommand(GetRune(args), std::move(bytes));
 }
 
-// __rune_subscribe_event(name: string) -> undefined
+// __rune_subscribe_event(name: string, priority?: string) -> undefined
 //
-// CBOR shape: { "op": "subscribe_event", "name": <event-class> }
+// CBOR shape:
+//   { "op": "subscribe_event",
+//     "name": <event-class>,
+//     "priority": <"LOWEST"|"LOW"|"NORMAL"|"HIGH"|"HIGHEST"|"MONITOR"> }
+//
+// `priority` is optional on the wire; older JS or callers that omit it
+// get treated as NORMAL on the host (Bukkit default).
 void JS_SubscribeEvent(const v8::FunctionCallbackInfo<v8::Value>& args) {
   v8::Isolate* isolate = args.GetIsolate();
   if (args.Length() < 1) {
@@ -1026,12 +1032,19 @@ void JS_SubscribeEvent(const v8::FunctionCallbackInfo<v8::Value>& args) {
   v8::String::Utf8Value name(isolate, args[0]);
   if (!*name) return;
 
+  bool hasPriority = args.Length() >= 2 && args[1]->IsString();
+  v8::String::Utf8Value priority(isolate, hasPriority ? args[1] : args[0]);
+
   std::vector<uint8_t> bytes;
-  cbor_map_header(bytes, 2);
+  cbor_map_header(bytes, hasPriority ? 3 : 2);
   cbor_text(bytes, "op");
   cbor_text(bytes, "subscribe_event");
   cbor_text(bytes, "name");
   cbor_text(bytes, *name, static_cast<size_t>(name.length()));
+  if (hasPriority) {
+    cbor_text(bytes, "priority");
+    cbor_text(bytes, *priority, static_cast<size_t>(priority.length()));
+  }
 
   EnqueueCommand(GetRune(args), std::move(bytes));
 }

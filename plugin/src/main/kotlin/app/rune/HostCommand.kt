@@ -1,5 +1,7 @@
 package app.rune
 
+import org.bukkit.event.EventPriority
+
 /**
  * Mirror of `rune_host_api::HostCommand` (see `DESIGN_SPEC.md` §6.2). Encoded
  * by the Rust side as a CBOR tagged-enum map: `{"op": "<variant>", ...fields}`.
@@ -18,11 +20,20 @@ sealed class HostCommand {
     ) : HostCommand()
 
     /**
-     * First-registration notification: at least one script just bound a
-     * handler for `name` (a Bukkit event class name). The reflective forwarder
-     * uses this to skip dispatch for events with no subscribers.
+     * First-registration notification for a (event, priority) tuple: at
+     * least one script just bound a handler for `name` (a Bukkit event
+     * class name) at `priority`. The reflective forwarder uses the tuple
+     * to register a Bukkit listener at the requested priority — one
+     * listener per unique tuple, even if many JS handlers share it.
+     *
+     * `priority` defaults to NORMAL when the JS side omits it (matches
+     * the Bukkit `@EventHandler` default, and gives back-compat for
+     * older JS bootstraps that don't pass the second arg).
      */
-    data class SubscribeEvent(val name: String) : HostCommand()
+    data class SubscribeEvent(
+        val name: String,
+        val priority: EventPriority = EventPriority.NORMAL,
+    ) : HostCommand()
 
     /**
      * Script registered a new Brigadier command. Collected during script load

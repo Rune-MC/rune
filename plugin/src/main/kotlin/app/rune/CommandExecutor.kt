@@ -16,9 +16,18 @@ import java.util.logging.Level
 class CommandExecutor(
     private val plugin: JavaPlugin,
     private val native: NativeLoader,
-    private val subscribedEvents: MutableSet<String>,
+    private val subscribedEvents: MutableSet<Pair<String, org.bukkit.event.EventPriority>>,
     private val scriptCommands: ScriptCommandRegistry,
 ) : Runnable {
+
+    /**
+     * Set by [RunePlugin] once the GenericEventForwarder exists. Each
+     * SubscribeEvent command then calls into the forwarder so dynamic
+     * `rune.on(...)` subscriptions (added past initial script load,
+     * e.g. via /rune reload or runtime conditionals) immediately wire
+     * up a Bukkit listener at the requested priority.
+     */
+    var onSubscribe: ((String, org.bukkit.event.EventPriority) -> Unit)? = null
 
     fun start() {
         // The Consumer<ScheduledTask> parameter is ignored; we only need
@@ -60,7 +69,8 @@ class CommandExecutor(
                 }
             }
             is HostCommand.SubscribeEvent -> {
-                subscribedEvents.add(cmd.name)
+                subscribedEvents.add(cmd.name to cmd.priority)
+                onSubscribe?.invoke(cmd.name, cmd.priority)
             }
             is HostCommand.RegisterCommand -> {
                 scriptCommands.queue(cmd.spec)

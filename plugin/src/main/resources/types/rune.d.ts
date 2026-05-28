@@ -95,12 +95,21 @@ interface RuneApi {
      * String form still works for events not in RuneEventMap (e.g.
      * third-party plugin events not on the classpath at type-gen time).
      */
-    on<E>(event: EventKey<E>, handler: (e: E) => void | Promise<void>): void;
+    on<E>(
+        event: EventKey<E>,
+        handler: (e: E) => void | Promise<void>,
+        opts?: rune.EventHandlerOptions,
+    ): void;
     on<K extends keyof RuneEventMap>(
         event: K,
         handler: (e: RuneEventMap[K]) => void | Promise<void>,
+        opts?: rune.EventHandlerOptions,
     ): void;
-    on(event: string, handler: (e: Record<string, unknown>) => void): void;
+    on(
+        event: string,
+        handler: (e: Record<string, unknown>) => void,
+        opts?: rune.EventHandlerOptions,
+    ): void;
 
     /**
      * Register a Brigadier command. Two shapes -- pick whichever fits:
@@ -983,11 +992,55 @@ declare global {
     function Listener(target: any, context?: any): any;
 
     /**
+     * Bukkit's six EventPriority values, plus the implicit "registration
+     * phase" the JS runtime uses. Matches `org.bukkit.event.EventPriority`
+     * exactly; pass either form (case-insensitive on the wire).
+     */
+    type EventPriority =
+        | "LOWEST"
+        | "LOW"
+        | "NORMAL"
+        | "HIGH"
+        | "HIGHEST"
+        | "MONITOR";
+
+    /**
+     * Optional handler configuration, mirroring real Bukkit `@EventHandler`:
+     *
+     *   @EventHandler(Events.PlayerJoinEvent, { priority: "HIGH" })
+     *   @EventHandler(Events.BlockBreakEvent, { ignoreCancelled: true })
+     *
+     * Defaults match Bukkit's defaults (`NORMAL`, `false`). Omitting the
+     * options object entirely is the most common form and equivalent to
+     * `{ priority: "NORMAL", ignoreCancelled: false }`.
+     */
+    interface EventHandlerOptions {
+        /**
+         * When during the event dispatch chain to run this handler.
+         * Bukkit fires listeners in ascending order LOWEST → MONITOR;
+         * by convention MONITOR handlers must NOT mutate the event.
+         */
+        priority?: EventPriority;
+        /**
+         * When true and the event implements `Cancellable`, skip this
+         * handler if `event.isCancelled()` returns true at dispatch
+         * time. Implemented entirely on the JS side, so the event still
+         * crosses the JVM↔JS boundary either way — useful for handlers
+         * that just want to observe non-cancelled events without writing
+         * the check themselves.
+         */
+        ignoreCancelled?: boolean;
+    }
+
+    /**
      * Mark a method as a handler for a Bukkit event. Preferred form uses
      * the typed `Events.X` enum value:
      *
      *   @EventHandler(Events.PlayerJoinEvent)
      *   onJoin(e: PlayerJoinEvent) { ... }   // explicit annotation
+     *
+     *   @EventHandler(Events.AsyncChatEvent, { priority: "HIGH", ignoreCancelled: true })
+     *   onChat(e: AsyncChatEvent) { ... }
      *
      * String form is kept for compatibility (events not in RuneEventMap):
      *
@@ -1001,6 +1054,7 @@ declare global {
      */
     function EventHandler<E>(
         eventKey: EventKey<E>,
+        opts?: EventHandlerOptions,
     ): <This>(
         method: (this: This, e: E) => void | Promise<void>,
         context: ClassMethodDecoratorContext<
@@ -1010,6 +1064,7 @@ declare global {
     ) => void;
     function EventHandler<K extends keyof RuneEventMap>(
         eventName: K,
+        opts?: EventHandlerOptions,
     ): <This>(
         method: (this: This, e: RuneEventMap[K]) => void | Promise<void>,
         context: ClassMethodDecoratorContext<

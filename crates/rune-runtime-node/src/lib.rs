@@ -141,7 +141,33 @@ const BOOTSTRAP_JS_TEMPLATE: &str = r#"
   }
 })();
 
+// eventName -> Array<{ fn, priority, ignoreCancelled }>. Command dispatch
+// (the `__rune_command:...` synthetic events emitted by ScriptCommandRegistry)
+// uses the same map; entries there have priority='NORMAL' and the priority
+// suffix in __runeDispatch is empty, so the same loop matches.
 const handlers = new Map();
+
+// Set of `${eventName}#${priority}` keys we've already told the host about.
+// Prevents the second handler at the same tuple from triggering another
+// Bukkit registration on the JVM side.
+const _runeSubscribedTuples = new Set();
+
+// Bukkit's six EventPriority values + their JVM-side ordering. We accept
+// any casing on the JS side and normalize to upper. Anything else is a
+// user error and we throw — better than silently mapping to NORMAL.
+const _RUNE_PRIORITIES = new Set([
+  'LOWEST', 'LOW', 'NORMAL', 'HIGH', 'HIGHEST', 'MONITOR',
+]);
+function _runeNormalizePriority(p) {
+  if (p == null) return 'NORMAL';
+  const s = String(p).toUpperCase();
+  if (!_RUNE_PRIORITIES.has(s)) {
+    throw new TypeError(
+      `priority "${p}" must be one of: ${[..._RUNE_PRIORITIES].join(', ')}`
+    );
+  }
+  return s;
+}
 
 function _fmt(args) {
   let out = '';
@@ -322,17 +348,32 @@ globalThis.rune = {
   broadcast(message) {
     __rune_broadcast(String(message));
   },
-  on(event, fn) {
+  on(event, fn, opts) {
     if (typeof fn !== 'function') {
-      throw new TypeError('rune.on(event, fn): fn must be a function');
+      throw new TypeError('rune.on(event, fn, opts?): fn must be a function');
     }
+    if (opts != null && typeof opts !== 'object') {
+      throw new TypeError('rune.on(event, fn, opts): opts must be an object');
+    }
+    const priority = _runeNormalizePriority(opts && opts.priority);
+    const ignoreCancelled = Boolean(opts && opts.ignoreCancelled);
+    // Subscribe once per (event, priority) tuple — multiple JS handlers at
+    // the same priority share one Bukkit registration. Without the
+    // priority suffix in the subscribe call, the host couldn't know to
+    // register the listener at the requested phase.
     let list = handlers.get(event);
     if (!list) {
       list = [];
       handlers.set(event, list);
-      __rune_subscribe_event(String(event));
     }
-    list.push(fn);
+    const seenKey = `${event}#${priority}`;
+    if (!_runeSubscribedTuples.has(seenKey)) {
+      _runeSubscribedTuples.add(seenKey);
+      // 2nd arg is optional; the host treats missing as "NORMAL". Older
+      // host builds that ignore the extra arg degrade to NORMAL too.
+      __rune_subscribe_event(String(event), priority);
+    }
+    list.push({ fn, priority, ignoreCancelled });
   },
 
   // Reflective Bukkit surface -- identical to the deno_core backend.
@@ -1742,17 +1783,24 @@ function _runeCallerScriptDir() {
 
 const _EVENT_HANDLERS = Symbol('rune:eventHandlers'); // instance -> [{event, propName}]
 
-globalThis.EventHandler = function EventHandler(eventName) {
+globalThis.EventHandler = function EventHandler(eventName, opts) {
   if (typeof eventName !== 'string') {
-    throw new TypeError('@EventHandler("EventName"): event name (a string) is required');
+    throw new TypeError('@EventHandler("EventName", opts?): event name (a string) is required');
   }
+  if (opts != null && typeof opts !== 'object') {
+    throw new TypeError('@EventHandler opts must be an object: { priority?, ignoreCancelled? }');
+  }
+  // Validate options eagerly so a typo at script-load time surfaces as a
+  // clear error, not a silent default at first event fire.
+  const priority = _runeNormalizePriority(opts && opts.priority);
+  const ignoreCancelled = Boolean(opts && opts.ignoreCancelled);
   return function (_method, context) {
     if (!context || context.kind !== 'method') {
       throw new Error('@EventHandler must decorate a method');
     }
     context.addInitializer(function () {
       const list = this[_EVENT_HANDLERS] ?? (this[_EVENT_HANDLERS] = []);
-      list.push({ event: eventName, propName: String(context.name) });
+      list.push({ event: eventName, propName: String(context.name), priority, ignoreCancelled });
     });
   };
 };
@@ -1768,14 +1816,17 @@ globalThis.Listener = function Listener(target, _context) {
     __rune_log_error('@Listener: class needs a no-arg constructor: ' + (e && e.message || e));
     return target;
   }
-  const handlers = probe[_EVENT_HANDLERS] || [];
-  if (handlers.length === 0) {
+  const handlerMeta = probe[_EVENT_HANDLERS] || [];
+  if (handlerMeta.length === 0) {
     __rune_log_error('@Listener: class has no @EventHandler methods');
     return target;
   }
   const live = new target();
-  for (const { event, propName } of handlers) {
-    rune.on(event, (e) => live[propName](e));
+  for (const meta of handlerMeta) {
+    rune.on(meta.event, (e) => live[meta.propName](e), {
+      priority: meta.priority,
+      ignoreCancelled: meta.ignoreCancelled,
+    });
   }
   return target;
 };
@@ -1877,7 +1928,15 @@ function _runeWalkSpec(spec, runOverride, parentPath) {
     commandHandlers.set(path, handler);
     const eventName = '__rune_command:' + path;
     if (!handlers.has(eventName)) {
-      handlers.set(eventName, [_runeDispatchCommand.bind(null, path)]);
+      // Internal command-dispatch events don't go through Bukkit's
+      // priority system; the host fires them at the implicit "command"
+      // phase. We still box the entry in {fn,priority,ignoreCancelled}
+      // shape so the dispatch loop is uniform.
+      handlers.set(eventName, [{
+        fn: _runeDispatchCommand.bind(null, path),
+        priority: 'NORMAL',
+        ignoreCancelled: false,
+      }]);
       __rune_subscribe_event(eventName);
     }
   }
@@ -2413,8 +2472,23 @@ try {
 // present; otherwise hand the raw bytes through. Phase 4e will pre-decode
 // on the C++ side so handlers always get a plain JS object.
 globalThis.__runeDispatch = function (name, payload) {
-  const list = handlers.get(name);
+  // The host appends `#<PRIORITY>` to real-event dispatches so we can run
+  // only the handlers registered at this priority. Command-dispatch events
+  // (`__rune_command:...`) don't carry a suffix; for them we accept any
+  // priority (effectively "match all").
+  let eventName = name;
+  let firedAt = null;
+  const hashIdx = name.lastIndexOf('#');
+  if (hashIdx > 0) {
+    const maybePriority = name.substring(hashIdx + 1);
+    if (_RUNE_PRIORITIES.has(maybePriority)) {
+      eventName = name.substring(0, hashIdx);
+      firedAt = maybePriority;
+    }
+  }
+  const list = handlers.get(eventName);
   if (!list) return;
+
   let revived = payload;
   if (payload instanceof Uint8Array && typeof globalThis.__rune_decode_event === 'function') {
     try { revived = reviveRefs(globalThis.__rune_decode_event(payload)); }
@@ -2422,9 +2496,18 @@ globalThis.__runeDispatch = function (name, payload) {
   } else if (payload && typeof payload === 'object') {
     revived = reviveRefs(payload);
   }
-  for (const fn of list) {
+
+  // ignoreCancelled is implemented JS-side rather than at Bukkit
+  // registration time: every handler boxed in `list` knows whether it
+  // wants cancelled events skipped. The marshalled event exposes
+  // isCancelled() for any class that implements Cancellable.
+  const checkCancelled = revived && typeof revived.isCancelled === 'function';
+
+  for (const h of list) {
+    if (firedAt != null && h.priority !== firedAt) continue;
+    if (h.ignoreCancelled && checkCancelled && revived.isCancelled()) continue;
     try {
-      const result = fn(revived);
+      const result = h.fn(revived);
       // Async handlers: don't await (the host expects dispatch_event to
       // be effectively sync), but DO attach a .catch so a rejected
       // promise doesn't escape as an unhandledRejection and potentially

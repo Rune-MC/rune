@@ -16,7 +16,12 @@ class RunePlugin : JavaPlugin() {
     private var native: NativeLoader? = null
     private var scriptsDir: Path? = null
     private var refRegistry: RefRegistry? = null
-    private var subscribedEvents: MutableSet<String>? = null
+    // (eventClassName, EventPriority) tuples that at least one JS handler
+    // has subscribed to. The forwarder uses this to know which (class,
+    // priority) pairs to register with Bukkit's plugin manager. Newer
+    // additions (mid-runtime subscriptions, /rune reload re-subscribes)
+    // are reflected here as the executor drains commands.
+    private var subscribedEvents: MutableSet<Pair<String, org.bukkit.event.EventPriority>>? = null
     private var scriptCommands: ScriptCommandRegistry? = null
 
     override fun onEnable() {
@@ -83,7 +88,7 @@ class RunePlugin : JavaPlugin() {
             // Subscription set shared between the executor (writer) and the
             // forwarder (reader). ConcurrentHashMap.newKeySet() because events
             // may fire on any thread before being marshalled to main.
-            val subs: MutableSet<String> = ConcurrentHashMap.newKeySet()
+            val subs: MutableSet<Pair<String, org.bukkit.event.EventPriority>> = ConcurrentHashMap.newKeySet()
             subscribedEvents = subs
             // Ref registry holds live Bukkit objects keyed by integer IDs so
             // scripts can call methods on them via the sync-query channel.
@@ -126,6 +131,16 @@ class RunePlugin : JavaPlugin() {
 
             val executor = CommandExecutor(this, loader, subs, cmds)
 
+            // Build the forwarder before scripts load so the executor's
+            // SubscribeEvent handler can immediately wire each new (event,
+            // priority) tuple to Bukkit. Dynamic `rune.on(...)` calls
+            // after onEnable (incl. /rune reload's re-subscribe pass)
+            // pick up a live listener the same way.
+            val forwarder = GenericEventForwarder(loader, this, subs, marshaller)
+            executor.onSubscribe = { name, priority ->
+                forwarder.ensureRegistered(name, priority)
+            }
+
             // Load scripts first so they get a chance to call `rune.on(...)`,
             // which queues SubscribeEvent commands.
             loadAllScripts(loader, scriptsRoot)
@@ -136,8 +151,12 @@ class RunePlugin : JavaPlugin() {
             // empty subscription set.
             executor.run()
 
-            val registered = GenericEventForwarder(loader, this, subs, marshaller).registerAll()
-            logger.info("Event forwarder online ($registered classes, ${subs.size} subscribed)")
+            // Belt-and-braces: ensureRegistered is idempotent, but call
+            // registerAll() once after the initial drain in case any
+            // tuples were added before onSubscribe was wired (during the
+            // micro-window between executor construction and assignment).
+            val registered = forwarder.registerAll()
+            logger.info("Event forwarder online ($registered new registrations, ${subs.size} subscribed)")
 
             executor.start()
 
