@@ -18,7 +18,7 @@ use crate::commands::install_dir;
 
 pub async fn run(args: RemoveArgs) -> Result<()> {
     let scripts_dir = install_dir::resolve(args.scripts.as_deref())?;
-    let basename = install_dir::dir_name(&args.name).to_string();
+    let basename = install_dir::dir_name(&args.name);
     let target_dir = scripts_dir.join(&basename);
 
     if !target_dir.exists() {

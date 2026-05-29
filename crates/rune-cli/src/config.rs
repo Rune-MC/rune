@@ -67,6 +67,13 @@ pub struct RuneToml {
     pub capabilities: CapabilitiesSection,
     #[serde(default)]
     pub dependencies: BTreeMap<String, String>,
+
+    /// Marks this Rune as a shared library: other Runes import from it,
+    /// but the runtime does NOT auto-execute its `entry` script. Mirrors
+    /// the `"library": true` flag in the runtime's `rune.jsonc`. Default
+    /// false so existing application Runes don't need to opt out.
+    #[serde(default)]
+    pub library: bool,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, Default)]

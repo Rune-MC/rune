@@ -33,8 +33,19 @@ pub struct Manifest {
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub dependencies: BTreeMap<String, String>,
 
+    /// Library Runes are imported by other Runes but never auto-executed
+    /// by the runtime. Omitted (not just `false`) from the canonical JSON
+    /// when the Rune is an application, so existing manifest hashes
+    /// don't change.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub library: bool,
+
     pub metadata: Metadata,
     pub compiler: CompilerInfo,
+}
+
+fn is_false(b: &bool) -> bool {
+    !*b
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -88,6 +99,7 @@ impl Manifest {
             files: Vec::new(),
             capabilities: cfg.capabilities.required.clone(),
             dependencies: cfg.dependencies.clone(),
+            library: cfg.library,
             metadata: Metadata {
                 description: cfg.description.clone(),
                 license: cfg.license.clone(),

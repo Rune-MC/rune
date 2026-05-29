@@ -1928,16 +1928,16 @@ function _runeWalkSpec(spec, runOverride, parentPath) {
     commandHandlers.set(path, handler);
     const eventName = '__rune_command:' + path;
     if (!handlers.has(eventName)) {
-      // Internal command-dispatch events don't go through Bukkit's
-      // priority system; the host fires them at the implicit "command"
-      // phase. We still box the entry in {fn,priority,ignoreCancelled}
-      // shape so the dispatch loop is uniform.
+      // Internal command-dispatch events. The host fires them directly
+      // via ScriptCommandRegistry → native.dispatchEvent("__rune_command:<path>"),
+      // bypassing Bukkit's listener registration entirely — so we do NOT
+      // call __rune_subscribe_event for them. Boxed in the same shape as
+      // real-event handlers so the dispatch loop stays uniform.
       handlers.set(eventName, [{
         fn: _runeDispatchCommand.bind(null, path),
         priority: 'NORMAL',
         ignoreCancelled: false,
       }]);
-      __rune_subscribe_event(eventName);
     }
   }
   const argsOut = (spec.args || []).map((a) => {

@@ -32,6 +32,19 @@ data class RuneConfig(
      * feature is planned but not active. Scenario B in the design.
      */
     val maven: Map<String, String> = emptyMap(),
+    /**
+     * npm-style package name this Rune publishes itself as. When set, the
+     * loader materialises `scripts/node_modules/<name>/` as a junction to
+     * this Rune's folder so other Runes can `import x from "<name>/subpath"`.
+     * Supports scoped names like `@hylandia/core`.
+     */
+    val name: String? = null,
+    /**
+     * When true, the loader registers this Rune's package name + imports
+     * but does NOT auto-execute any entry script. Intended for shared
+     * library code (db client, helpers, types) consumed by other Runes.
+     */
+    val library: Boolean = false,
 )
 
 data class PluginDep(
@@ -59,4 +72,22 @@ data class MergedConfig(
     val plugins: Map<String, PluginDep>,
     val aliases: Map<String, String>,
     val maven: Map<String, String> = emptyMap(),
+    /**
+     * Per-folder library declarations. Each entry is a Rune folder that
+     * declared a package `name` in its rune.jsonc, with whether it should
+     * be auto-executed (`library = false`) or skipped (`library = true`).
+     */
+    val libraries: List<LibraryDecl> = emptyList(),
+)
+
+/**
+ * A Rune folder that declared an importable package name. The loader
+ * materialises a junction at `scripts/node_modules/<name>/` -> [folder],
+ * regardless of whether the Rune is also auto-executed (`isLibrary=false`)
+ * or library-only (`isLibrary=true`).
+ */
+data class LibraryDecl(
+    val name: String,
+    val folder: java.nio.file.Path,
+    val isLibrary: Boolean,
 )

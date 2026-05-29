@@ -23,7 +23,7 @@ class RuneConfigReader(private val plugin: JavaPlugin) {
     private val gson = Gson()
 
     fun load(scriptsDir: Path): MergedConfig {
-        if (!Files.exists(scriptsDir)) return MergedConfig(emptyMap(), emptyMap())
+        if (!Files.exists(scriptsDir)) return MergedConfig(emptyMap(), emptyMap(), emptyMap(), emptyList())
 
         val configs = mutableListOf<Pair<Path, RuneConfig>>()
         Files.walk(scriptsDir, /* maxDepth */ 3).use { stream ->
@@ -94,15 +94,38 @@ class RuneConfigReader(private val plugin: JavaPlugin) {
     }
 
     private fun merge(configs: List<Pair<Path, RuneConfig>>): MergedConfig {
-        if (configs.isEmpty()) return MergedConfig(emptyMap(), emptyMap(), emptyMap())
+        if (configs.isEmpty()) return MergedConfig(emptyMap(), emptyMap(), emptyMap(), emptyList())
 
         val mergedPlugins = LinkedHashMap<String, PluginDep>()
         val pluginOrigin = LinkedHashMap<String, Path>()
         val mergedAliases = LinkedHashMap<String, String>()
         val aliasOrigin = LinkedHashMap<String, Path>()
         val mergedMaven = LinkedHashMap<String, String>()
+        // Per-folder. Key = declared package name; value = decl. Dup names
+        // across folders are last-wins with a warning.
+        val libraries = LinkedHashMap<String, LibraryDecl>()
 
         for ((path, cfg) in configs) {
+            val folder = path.parent
+            if (!cfg.name.isNullOrBlank() && folder != null) {
+                val prior = libraries[cfg.name]
+                if (prior != null && prior.folder != folder) {
+                    plugin.logger.warning(
+                        "rune.jsonc: package name '${cfg.name}' redeclared in $path " +
+                            "(first seen in ${prior.folder}); last-wins"
+                    )
+                }
+                libraries[cfg.name] = LibraryDecl(
+                    name = cfg.name,
+                    folder = folder,
+                    isLibrary = cfg.library,
+                )
+            } else if (cfg.library && cfg.name.isNullOrBlank()) {
+                plugin.logger.warning(
+                    "rune.jsonc at $path declares `library: true` but has no `name`; " +
+                        "library Runes must publish a package name (e.g. \"@scope/pkg\")."
+                )
+            }
             for ((alias, coords) in cfg.maven) {
                 mergedMaven[alias] = coords
             }
@@ -142,7 +165,12 @@ class RuneConfigReader(private val plugin: JavaPlugin) {
             }
             mergedAliases[alias] = pkg
         }
-        return MergedConfig(mergedPlugins, mergedAliases, mergedMaven)
+        return MergedConfig(
+            plugins = mergedPlugins,
+            aliases = mergedAliases,
+            maven = mergedMaven,
+            libraries = libraries.values.toList(),
+        )
     }
 
     /**

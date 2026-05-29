@@ -23,6 +23,12 @@ class RunePlugin : JavaPlugin() {
     // are reflected here as the executor drains commands.
     private var subscribedEvents: MutableSet<Pair<String, org.bukkit.event.EventPriority>>? = null
     private var scriptCommands: ScriptCommandRegistry? = null
+    /**
+     * Per-folder library declarations from rune.jsonc. Drives:
+     *   * `loadAllScripts` skips folders flagged `library: true`
+     *   * `/plugins` listing tags library Runes
+     */
+    private var libraryDecls: List<LibraryDecl> = emptyList()
 
     override fun onEnable() {
         // Register /rune commands BEFORE we try anything that might throw.
@@ -81,6 +87,12 @@ class RunePlugin : JavaPlugin() {
             val wired = wireConfigArtifacts(config, scriptsRoot, runtimeDir, tsGen)
             val depLoaders = wired.loaders
             val depPackages = wired.packages
+
+            // Materialise library mounts BEFORE loading any scripts so the
+            // first non-library Rune's top-level imports can resolve their
+            // `@scope/pkg` deps via Node's normal node_modules walk.
+            LibraryLinker(this).materialize(scriptsRoot, config.libraries)
+            libraryDecls = config.libraries
 
             val loader = NativeLoader(libPath, scriptsRoot, logger)
             native = loader
@@ -155,8 +167,10 @@ class RunePlugin : JavaPlugin() {
             // registerAll() once after the initial drain in case any
             // tuples were added before onSubscribe was wired (during the
             // micro-window between executor construction and assignment).
-            val registered = forwarder.registerAll()
-            logger.info("Event forwarder online ($registered new registrations, ${subs.size} subscribed)")
+            forwarder.registerAll()
+            logger.info(
+                "Event forwarder online (${forwarder.registrationCount()} live registrations)"
+            )
 
             executor.start()
 
@@ -529,14 +543,25 @@ class RunePlugin : JavaPlugin() {
     private fun sendPluginsOverview(sender: CommandSender) {
         // ---- Runes ----
         val runeNames = listInstalledRunes()
+        // Library folders show in a softer colour with a "(library)" tag so
+        // operators can tell at a glance which Runes auto-executed vs which
+        // are mounted only for import by their siblings.
+        val libraryFolders: Set<String> = libraryDecls
+            .filter { it.isLibrary }
+            .map { it.folder.fileName.toString() }
+            .toSet()
         val runeHeader = colored("Runes (${runeNames.size}): ", NamedTextColor.WHITE)
         val runeBody = if (runeNames.isEmpty()) {
             colored("none", NamedTextColor.GRAY)
         } else {
-            // All listed runes are "active" — Rune doesn't load runes it
-            // can't start. Use green to match how /plugins colour-codes
-            // enabled plugins.
-            joinWithCommas(runeNames.map { colored(it, NamedTextColor.GREEN) })
+            joinWithCommas(runeNames.map { name ->
+                if (name in libraryFolders) {
+                    colored(name, NamedTextColor.AQUA)
+                        .append(colored(" (library)", NamedTextColor.DARK_GRAY))
+                } else {
+                    colored(name, NamedTextColor.GREEN)
+                }
+            })
         }
         sender.sendMessage(runeHeader.append(runeBody))
 
@@ -633,6 +658,14 @@ class RunePlugin : JavaPlugin() {
      * tsconfig/jsconfig/package.json, and the bundled `rune.d.ts`.
      */
     private fun loadAllScripts(loader: NativeLoader, scriptsDir: Path) {
+        // Folders flagged `library: true` are mounted under node_modules
+        // for other Runes to import but must NOT auto-execute. Compare
+        // real paths so junctions / symlinks elsewhere don't confuse us.
+        val librarySkip: Set<Path> = libraryDecls
+            .filter { it.isLibrary }
+            .mapNotNull { runCatching { it.folder.toRealPath() }.getOrNull() }
+            .toSet()
+
         Files.list(scriptsDir).use { stream ->
             stream.sorted().forEach { entry ->
                 val name = entry.fileName.toString()
@@ -645,6 +678,11 @@ class RunePlugin : JavaPlugin() {
                     lower == "package.json" ||
                     lower.endsWith(".d.ts")
                 ) {
+                    return@forEach
+                }
+                val entryReal = runCatching { entry.toRealPath() }.getOrNull()
+                if (entryReal != null && entryReal in librarySkip) {
+                    logger.info("Skipping library Rune $name (importable as package)")
                     return@forEach
                 }
 

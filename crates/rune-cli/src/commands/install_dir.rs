@@ -93,14 +93,19 @@ fn looks_like_scripts_dir(p: &Path) -> bool {
     }
 }
 
-/// The on-disk directory name for a given canonical rune name. Strips
-/// the `@scope/` prefix so installs land at `scripts/<basename>/`
-/// matching the way authors lay out their source trees.
-pub fn dir_name(canonical: &str) -> &str {
-    canonical
-        .rsplit_once('/')
-        .map(|(_, base)| base)
-        .unwrap_or(canonical)
+/// The on-disk directory name for a given canonical rune name.
+///
+/// Scoped names (`@scope/pkg`) flatten to `@scope-pkg/` so every install
+/// lives as a single top-level folder under `scripts/`. We deliberately
+/// avoid the literal `@scope/pkg/` layout — it would force a nested
+/// directory (and Rune's loader would treat the `@scope` parent as a
+/// folder-script with no entry, producing noise on enable).
+pub fn dir_name(canonical: &str) -> String {
+    if let Some((scope, base)) = canonical.split_once('/') {
+        format!("{scope}-{base}")
+    } else {
+        canonical.to_string()
+    }
 }
 
 pub fn read_lock(install_dir: &Path) -> Result<Option<InstallLock>> {

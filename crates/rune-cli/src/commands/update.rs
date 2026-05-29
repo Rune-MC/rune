@@ -57,7 +57,7 @@ pub async fn run(args: UpdateArgs) -> Result<()> {
         // a clear error if the requested rune isn't installed (the
         // loop iteration will print nothing for unrelated entries).
         if let Some(filter) = &args.name {
-            if &lock.name != filter && install_dir::dir_name(&lock.name) != filter.as_str() {
+            if &lock.name != filter && install_dir::dir_name(&lock.name).as_str() != filter.as_str() {
                 continue;
             }
         }

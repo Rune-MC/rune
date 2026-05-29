@@ -63,21 +63,22 @@ class GenericEventForwarder(
 
     /**
      * Registers a Bukkit listener for each `(event, priority)` tuple
-     * that's already accumulated in `subscribedEvents`. Used at plugin
-     * startup once the initial script load has drained subscribe
-     * commands. Returns the number of new registrations made (excludes
-     * tuples already registered by a prior call).
+     * that's already accumulated in `subscribedEvents`. Belt-and-braces
+     * catch-up at end of onEnable: the executor's onSubscribe callback
+     * normally registers each tuple as the command drains, so this loop
+     * is a no-op in steady state. It mops up the micro-window between
+     * executor construction and the onSubscribe wire-up.
      */
     fun registerAll(): Int {
         var registered = 0
-        // Snapshot — concurrent mutation would just mean those entries
-        // arrive via ensureRegistered later anyway.
         for ((name, priority) in subscribedEvents.toList()) {
             if (ensureRegistered(name, priority)) registered += 1
         }
-        plugin.logger.info("Registered $registered event forwarder(s) across the subscribed set")
         return registered
     }
+
+    /** Total `(event, priority)` tuples currently wired to Bukkit. */
+    fun registrationCount(): Int = registeredTuples.size
 
     /**
      * Idempotently register the (event, priority) tuple with Bukkit.
@@ -88,6 +89,12 @@ class GenericEventForwarder(
      * startup also get a live Bukkit listener.
      */
     fun ensureRegistered(name: String, priority: EventPriority): Boolean {
+        // Synthetic command-dispatch events (`__rune_command:<path>`)
+        // aren't Bukkit events — ScriptCommandRegistry fires them via
+        // native.dispatchEvent directly. Defensive guard in case any
+        // pre-0.3.7 bootstrap still emits subscribe calls for them.
+        if (name.startsWith("__rune_command:")) return false
+
         val key = name to priority
         if (!registeredTuples.add(key)) return false
         val clazz = classes()[name]
@@ -103,7 +110,7 @@ class GenericEventForwarder(
             true
         } catch (e: Throwable) {
             registeredTuples.remove(key)
-            plugin.logger.fine("Skipped event $name@$priority: ${e.message}")
+            plugin.logger.warning("failed to register $name@$priority: ${e.message}")
             false
         }
     }
@@ -116,13 +123,26 @@ class GenericEventForwarder(
             if (Bukkit.isPrimaryThread()) {
                 dispatch(event, priorityName)
             } else {
-                // GlobalRegionScheduler works on both vanilla Paper (main
-                // thread) and Folia (global region thread). On Folia
-                // isPrimaryThread() returns false for every region thread,
-                // so this defer path is always taken — which is the
-                // correct, serialised place to invoke the single-threaded
-                // JS runtime.
-                Bukkit.getGlobalRegionScheduler().run(plugin) { _ -> dispatch(event, priorityName) }
+                // Async event (AsyncChatEvent, etc.) fired from a non-main
+                // thread (netty in chat's case). The JS runtime is pinned to
+                // the main thread, so we hop via GlobalRegionScheduler — but
+                // we MUST block the calling thread until dispatch finishes,
+                // otherwise Bukkit's handler chain proceeds and the action
+                // (chat broadcast, etc.) completes before any setCancelled()
+                // from JS lands on the event.
+                val latch = java.util.concurrent.CountDownLatch(1)
+                Bukkit.getGlobalRegionScheduler().run(plugin) { _ ->
+                    try { dispatch(event, priorityName) }
+                    finally { latch.countDown() }
+                }
+                // Bounded wait: if the main thread is wedged we'd rather
+                // let the chat through than freeze the netty thread forever.
+                if (!latch.await(2, java.util.concurrent.TimeUnit.SECONDS)) {
+                    plugin.logger.warning(
+                        "async dispatch of ${clazz.simpleName}@$priorityName " +
+                        "timed out; event proceeded without JS handler"
+                    )
+                }
             }
         }
         plugin.server.pluginManager.registerEvent(

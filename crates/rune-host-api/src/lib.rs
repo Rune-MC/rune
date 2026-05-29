@@ -74,11 +74,18 @@ pub enum HostCommand {
     },
 
     /// Tell the host that at least one script has registered a handler for
-    /// the given Bukkit event class (e.g. `"PlayerJoinEvent"`). The host
-    /// uses this set to skip the CBOR encode + FFI dispatch for events that
-    /// no script cares about (otherwise high-frequency events like
-    /// `EntityMoveEvent` would dominate the per-tick budget).
-    SubscribeEvent { name: String },
+    /// the given Bukkit event class (e.g. `"PlayerJoinEvent"`) at the
+    /// given priority. The host uses the (name, priority) tuple to wire
+    /// a Bukkit listener at that phase — see GenericEventForwarder.
+    ///
+    /// `priority` is optional on the wire to preserve compatibility with
+    /// older JS bootstraps that emit single-arg `__rune_subscribe_event`
+    /// calls; missing means NORMAL (matches Bukkit `@EventHandler` default).
+    SubscribeEvent {
+        name: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        priority: Option<String>,
+    },
 
     /// Register a Brigadier command. Specs are collected on the host side
     /// and built into Brigadier trees when Paper's `LifecycleEvents.COMMANDS`
