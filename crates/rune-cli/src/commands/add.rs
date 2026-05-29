@@ -25,6 +25,7 @@ use indicatif::{ProgressBar, ProgressStyle};
 use tokio::sync::Semaphore;
 use tokio::task::JoinSet;
 
+use crate::auth;
 use crate::cli::AddArgs;
 use crate::commands::install_dir::{self, InstallLock};
 use crate::commands::pkg_manager;
@@ -49,7 +50,14 @@ pub async fn run(args: AddArgs) -> Result<()> {
     let target_dir = scripts_dir.join(install_dir::dir_name(&name));
 
     // ---- 3. Resolve version ----
-    let client = Arc::new(Client::new(args.registry.clone(), String::new())?);
+    // Private Runes (incl. unlisted org-internal libs) reject unauth'd
+    // GETs with 404 via canReadRune. Pass the saved token when one is
+    // present so installs of private Runes the user owns / belongs to
+    // work without `--token`. Public Runes don't care either way.
+    let token = auth::get(&args.registry)?
+        .map(|e| e.token)
+        .unwrap_or_default();
+    let client = Arc::new(Client::new(args.registry.clone(), token)?);
     let version = match requested_version {
         Some(v) => v,
         None => {

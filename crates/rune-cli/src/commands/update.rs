@@ -22,13 +22,18 @@ use anyhow::{Context, Result, anyhow};
 use console::style;
 use semver::Version;
 
+use crate::auth;
 use crate::cli::UpdateArgs;
 use crate::commands::{add, install_dir};
 use crate::registry::Client;
 
 pub async fn run(args: UpdateArgs) -> Result<()> {
     let scripts_dir = install_dir::resolve(args.scripts.as_deref())?;
-    let client = Arc::new(Client::new(args.registry.clone(), String::new())?);
+    // Pass saved token when present so updates of private Runes work.
+    let token = auth::get(&args.registry)?
+        .map(|e| e.token)
+        .unwrap_or_default();
+    let client = Arc::new(Client::new(args.registry.clone(), token)?);
 
     let candidates = collect_installed(&scripts_dir)?;
     if candidates.is_empty() {

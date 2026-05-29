@@ -86,6 +86,21 @@ impl Client {
             .context("token contains characters not valid in an Authorization header")
     }
 
+    /// Auth header for the read endpoints (get_rune, get_manifest). These
+    /// accept anonymous traffic — but private Runes are 404'd by the
+    /// server's canReadRune check unless an Authorization header carries a
+    /// valid token. Returning Some(...) when a token is present lets `rune
+    /// add` reach private Runes the user owns. We don't push this onto
+    /// the reqwest default_headers because the R2 PUT in upload_blob uses
+    /// pre-signed URLs and any stray Authorization header confuses SigV4.
+    fn maybe_auth_header(&self) -> Result<Option<HeaderValue>> {
+        if self.token.is_empty() {
+            Ok(None)
+        } else {
+            Ok(Some(self.auth_header()?))
+        }
+    }
+
     fn url(&self, path: &str) -> Result<url::Url> {
         Ok(self.base.join(path)?)
     }
@@ -230,12 +245,11 @@ impl Client {
     /// pin) to decide which version to fetch.
     pub async fn get_rune(&self, name: &str) -> Result<RuneSummary> {
         let url = self.url(&format!("/api/v1/runes/{}", encode_name_segment(name)))?;
-        let resp = self
-            .http
-            .get(url)
-            .send()
-            .await
-            .context("GET /api/v1/runes/:name")?;
+        let mut req = self.http.get(url);
+        if let Some(h) = self.maybe_auth_header()? {
+            req = req.header(AUTHORIZATION, h);
+        }
+        let resp = req.send().await.context("GET /api/v1/runes/:name")?;
         unwrap_envelope(resp, "get-rune").await
     }
 
@@ -248,9 +262,11 @@ impl Client {
             "/api/v1/runes/{}/v/{version}/manifest",
             encode_name_segment(name)
         ))?;
-        let resp = self
-            .http
-            .get(url)
+        let mut req = self.http.get(url);
+        if let Some(h) = self.maybe_auth_header()? {
+            req = req.header(AUTHORIZATION, h);
+        }
+        let resp = req
             .send()
             .await
             .context("GET /api/v1/runes/:name/v/:version/manifest")?;
