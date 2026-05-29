@@ -280,15 +280,23 @@ class RunePlugin : JavaPlugin() {
             val root = Commands.literal("rune")
                 .requires { it.sender.hasPermission("rune.admin") || it.sender.isOp }
                 .then(
-                    Commands.literal("reload").executes { ctx ->
-                        val loader = native
-                        if (loader == null) {
-                            ctx.source.sender.sendMessage("Rune is not initialised.")
-                        } else {
-                            handleReload(ctx.source.sender, loader)
+                    // Console-only: in-game invocations of /rune reload
+                    // crash the JVM inside libnode (V8 isolate teardown
+                    // on a non-main thread, probably). Until the native
+                    // free path is hardened, gate the subcommand to the
+                    // console sender — the player still sees "Unknown
+                    // command" because Brigadier omits filtered nodes.
+                    Commands.literal("reload")
+                        .requires { it.sender is org.bukkit.command.ConsoleCommandSender }
+                        .executes { ctx ->
+                            val loader = native
+                            if (loader == null) {
+                                ctx.source.sender.sendMessage("Rune is not initialised.")
+                            } else {
+                                handleReload(ctx.source.sender, loader)
+                            }
+                            com.mojang.brigadier.Command.SINGLE_SUCCESS
                         }
-                        com.mojang.brigadier.Command.SINGLE_SUCCESS
-                    }
                 )
                 .then(
                     Commands.literal("status").executes { ctx ->
