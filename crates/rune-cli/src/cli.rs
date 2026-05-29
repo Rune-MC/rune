@@ -160,6 +160,13 @@ pub struct AddArgs {
     /// without this flag when the directory already exists.
     #[arg(long)]
     pub force: bool,
+
+    /// Skip installing the Rune's `[dependencies]`. By default `rune
+    /// add` walks the dep graph from rune.toml and installs every
+    /// missing dep into the same scripts folder. Use this when you
+    /// want a one-off install and intend to manage deps yourself.
+    #[arg(long)]
+    pub no_deps: bool,
 }
 
 #[derive(Args, Debug)]
