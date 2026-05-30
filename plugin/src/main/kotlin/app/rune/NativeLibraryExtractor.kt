@@ -97,9 +97,19 @@ class NativeLibraryExtractor(private val plugin: JavaPlugin) {
         // folder. The loader's own load attempt fails if any of these are
         // required but missing -- the extractor only logs at FINE so the
         // hosting plugin can surface its own error message.
+        //
+        // System.load preloads libnode into the process namespace with
+        // RTLD_GLOBAL, so the subsequent libraryLookup of librune_loader
+        // resolves its libnode imports without needing the OS dynamic
+        // linker to find the file via rpath / LD_LIBRARY_PATH. This is
+        // the only path that's portable across distros where /etc/ld.so
+        // doesn't know about our extraction dir.
         private val PLATFORM_SIBLINGS: Map<String, List<String>> = mapOf(
-            "windows-x86_64" to listOf("libnode.dll"),
-            // Linux / macOS libnode names follow if/when those builds land.
+            "windows-x86_64"  to listOf("libnode.dll"),
+            "linux-x86_64"    to listOf("libnode.so"),
+            "linux-aarch64"   to listOf("libnode.so"),
+            "macos-x86_64"    to listOf("libnode.dylib"),
+            "macos-aarch64"   to listOf("libnode.dylib"),
         )
     }
 }
