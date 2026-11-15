@@ -32,6 +32,7 @@ object HostCommandDecoder {
             val op = map.getString("op")
                 ?: throw IllegalArgumentException("command entry missing 'op'")
             when (op) {
+                "request_reload" -> HostCommand.RequestReload
                 "broadcast" -> HostCommand.Broadcast(
                     map.getString("message")
                         ?: throw IllegalArgumentException("broadcast missing 'message'")

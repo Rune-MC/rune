@@ -1,0 +1,10 @@
+{
+  "name": "@rune/vault",
+  "library": true,
+  "plugins": {
+    "Vault": {
+      "package": "net.milkbowl.vault",
+      "required": false
+    }
+  }
+}

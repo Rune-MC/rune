@@ -4,10 +4,7 @@
 #   .\new-script.ps1 -Name myscript                     # TS, current server
 #   .\new-script.ps1 -Name myscript -Lang ts -ServerPath C:\mc
 #
-# Languages currently supported: ts (Node + TypeScript)
-# Future: py (Python), lua (Lua), rs (Rust/Wasm) -- the template tree under
-# install/templates/ scales horizontally; add a new <lang>/ folder and a
-# case below to support a new runtime.
+# Languages: ts (TypeScript) and py (Python).
 
 param(
     [Parameter(Mandatory=$true)][string]$Name,
@@ -20,6 +17,10 @@ $ErrorActionPreference = "Stop"
 function Info($m) { Write-Host "[rune] $m" -ForegroundColor Cyan }
 function Ok($m)   { Write-Host "[rune] $m" -ForegroundColor Green }
 function Err($m)  { Write-Host "[rune] $m" -ForegroundColor Red }
+
+if ($Name -notmatch '^[a-zA-Z0-9_-][a-zA-Z0-9._-]*$' -or $Lang -notin @('ts', 'py')) {
+    throw "Use a simple script name and language ts or py."
+}
 
 # Resolve template dir relative to this script.
 $scriptDir   = Split-Path -Parent $MyInvocation.MyCommand.Path
@@ -55,4 +56,4 @@ Ok "Created $dest"
 Ok "Files:"
 Get-ChildItem $dest | ForEach-Object { Write-Host "  $($_.FullName)" }
 Write-Host ""
-Ok "Run /rune reload in-game to load it (or restart the server)."
+Ok "Run rune reload in the server console, or restart Paper to register new commands."

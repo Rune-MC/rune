@@ -1,0 +1,12 @@
+name = "@rune/placeholderapi"
+version = "0.1.0"
+language = "typescript"
+entry = "index.ts"
+description = "Resolve PlaceholderAPI expressions from a Rune."
+library = true
+
+[publish]
+include = ["index.ts", "rune.toml", "rune.jsonc", "package.json"]
+
+[capabilities]
+required = ["host:plugin:placeholderapi"]

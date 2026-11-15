@@ -14,6 +14,8 @@ use std::path::{Path, PathBuf};
 
 use rune_host_api::{HostCommand, LanguageRuntime, QueryCallback, QueryFn};
 
+mod python;
+
 const RUNE_OK: i32 = 0;
 const RUNE_ERR: i32 = -1;
 const RUNE_NO_RUNTIME: i32 = -2;
@@ -55,6 +57,7 @@ impl Loader {
             Ok(node) => backends.push(Box::new(node)),
             Err(e) => log::error!("node backend init failed: {e}"),
         }
+        backends.push(Box::new(python::PythonBackend::default()));
         Self {
             backends,
             pending_drain: None,
@@ -63,21 +66,67 @@ impl Loader {
     }
 
     fn route(&mut self, path: &Path) -> Option<&mut Box<dyn LanguageRuntime>> {
-        // Promote folder-scripts to their index entry's extension. Caller
-        // (`rune_load_script`) hands us the directory path; the backend's
-        // own FS resolution handles the actual entry file.
-        let ext_owned: String = if path.is_dir() {
-            ["ts", "mjs", "js"]
-                .iter()
-                .find(|e| path.join(format!("index.{e}")).exists())
-                .map(|e| (*e).to_string())?
-        } else {
-            path.extension()?.to_str()?.to_ascii_lowercase()
-        };
+        let ext_owned = path.extension()?.to_str()?.to_ascii_lowercase();
         self.backends
             .iter_mut()
             .find(|b| b.extensions().iter().any(|e| *e == ext_owned.as_str()))
     }
+}
+
+#[derive(serde::Deserialize)]
+struct ScriptManifest {
+    entry: String,
+    #[serde(default)]
+    library: bool,
+}
+
+fn entry_path(path: &Path) -> Result<Option<PathBuf>, Box<dyn std::error::Error>> {
+    if !path.is_dir() {
+        return Ok(Some(path.to_owned()));
+    }
+    let manifest_path = path.join("rune.toml");
+    if manifest_path.is_file() {
+        let manifest: ScriptManifest = toml::from_str(&std::fs::read_to_string(manifest_path)?)?;
+        if manifest.library {
+            return Ok(None);
+        }
+        let relative = Path::new(&manifest.entry);
+        if !relative.components().all(|part| matches!(part, std::path::Component::Normal(_))) {
+            return Err(format!("invalid entry path: {}", manifest.entry).into());
+        }
+        let root = path.canonicalize()?;
+        let entry = path.join(relative).canonicalize()?;
+        if !entry.starts_with(&root) || !entry.is_file() {
+            return Err(format!("entry must be a file inside {}", path.display()).into());
+        }
+        return Ok(Some(entry));
+    }
+    Ok(["index.ts", "index.mjs", "index.js", "index.py"]
+        .into_iter()
+        .map(|entry| path.join(entry))
+        .find(|entry| entry.is_file()))
+}
+
+#[cfg(test)]
+#[test]
+fn manifest_entry_and_legacy_index() {
+    let root = tempfile::tempdir().unwrap();
+    let entry = root.path().join("index.py");
+    std::fs::write(&entry, "").unwrap();
+    assert_eq!(entry_path(root.path()).unwrap(), Some(entry));
+
+    let nested = root.path().join("src");
+    std::fs::create_dir(&nested).unwrap();
+    let entry = nested.join("main.py");
+    std::fs::write(&entry, "").unwrap();
+    let manifest = root.path().join("rune.toml");
+    std::fs::write(&manifest, "entry = 'src/main.py'").unwrap();
+    assert_eq!(entry_path(root.path()).unwrap(), Some(entry.canonicalize().unwrap()));
+
+    std::fs::write(&manifest, "entry = 'src/main.py'\nlibrary = true").unwrap();
+    assert_eq!(entry_path(root.path()).unwrap(), None);
+    std::fs::write(&manifest, "entry = '../main.py'").unwrap();
+    assert!(entry_path(root.path()).is_err());
 }
 
 // ---------------------------------------------------------------------------
@@ -122,12 +171,19 @@ pub unsafe extern "C" fn rune_load_script(loader: *mut Loader, path: *const c_ch
         Ok(s) => s,
         Err(_) => return RUNE_ERR,
     };
-    let path = Path::new(path_str);
-    let Some(backend) = loader.route(path) else {
+    let path = match entry_path(Path::new(path_str)) {
+        Ok(Some(path)) => path,
+        Ok(None) => return RUNE_OK,
+        Err(error) => {
+            log::error!("resolve entry for {path_str}: {error}");
+            return RUNE_ERR;
+        }
+    };
+    let Some(backend) = loader.route(&path) else {
         log::warn!("no runtime claims extension for {path:?}");
         return RUNE_NO_RUNTIME;
     };
-    match backend.load_script(path) {
+    match backend.load_script(&path) {
         Ok(()) => RUNE_OK,
         Err(e) => {
             log::error!("load_script({path:?}) failed: {e}");

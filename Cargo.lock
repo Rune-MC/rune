@@ -1350,7 +1350,10 @@ dependencies = [
  "log",
  "rune-host-api",
  "rune-runtime-node",
+ "serde",
+ "serde_json",
  "tempfile",
+ "toml",
 ]
 
 [[package]]

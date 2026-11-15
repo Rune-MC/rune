@@ -155,9 +155,9 @@ impl RuneToml {
             .with_context(|| format!("invalid `name = \"{}\"`", self.name))?;
         semver::Version::parse(&self.version)
             .with_context(|| format!("invalid `version = \"{}\"` (must be semver)", self.version))?;
-        if !matches!(self.language.as_str(), "typescript" | "wasm") {
+        if !matches!(self.language.as_str(), "typescript" | "python" | "wasm") {
             return Err(anyhow!(
-                "invalid `language = \"{}\"` (supported: typescript, wasm)",
+                "invalid `language = \"{}\"` (supported: typescript, python, wasm)",
                 self.language
             ));
         }

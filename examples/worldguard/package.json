@@ -1,0 +1,6 @@
+{
+  "name": "@rune/worldguard",
+  "private": true,
+  "type": "module",
+  "exports": "./index.ts"
+}

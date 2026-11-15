@@ -1,0 +1,6 @@
+{
+  "name": "@rune/game-kit",
+  "private": true,
+  "type": "module",
+  "exports": "./index.ts"
+}

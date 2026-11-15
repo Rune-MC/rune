@@ -23,6 +23,7 @@ pub async fn run(args: InitArgs) -> Result<()> {
         (
             match args.language {
                 Language::Typescript => "src/index.ts",
+                Language::Python => "src/index.py",
                 Language::Wasm => "src/main.rs",
             },
             entry_template(args.language),
@@ -79,6 +80,7 @@ fn derive_name(dir: &Path) -> String {
 fn rune_toml(name: &str, language: Language) -> String {
     let entry = match language {
         Language::Typescript => "src/index.ts",
+        Language::Python => "src/index.py",
         Language::Wasm => "src/main.rs",
     };
     format!(
@@ -125,6 +127,8 @@ fn entry_template(language: Language) -> String {
 console.info("hello from rune!");
 "#
         .to_string(),
+        Language::Python => include_str!("../../../../install/templates/py/index.py")
+            .to_string(),
         Language::Wasm => r#"// Entry point for your Rune (Wasm target).
 //
 // Build with `cargo build --target wasm32-unknown-unknown --release`

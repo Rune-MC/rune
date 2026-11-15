@@ -10,6 +10,7 @@
 use std::ffi::CString;
 use std::fs;
 use std::path::Path;
+use std::sync::Mutex;
 
 use ciborium::value::Value;
 use rune_host_api::HostCommand;
@@ -17,6 +18,9 @@ use rune_loader::{
     rune_dispatch_event, rune_drain_commands, rune_init, rune_load_script, rune_shutdown,
     rune_tick,
 };
+
+// Embedded Node's inspector owns process-wide state. Start test runtimes in sequence.
+static NODE_RUNTIME: Mutex<()> = Mutex::new(());
 
 /// Build a CBOR map payload from `(key, string_value)` pairs.
 fn cbor_string_map(pairs: &[(&str, &str)]) -> Vec<u8> {
@@ -35,6 +39,7 @@ fn cbor_string_map(pairs: &[(&str, &str)]) -> Vec<u8> {
 /// for `player_name`, and asserts the runtime emits exactly one Broadcast
 /// matching `expected_message`.
 fn drive_join_test(script_path: &Path, player_name: &str, expected_message: &str) {
+    let _runtime = NODE_RUNTIME.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
     unsafe {
         let scripts_root_c =
             CString::new(script_path.parent().unwrap().to_string_lossy().as_bytes()).unwrap();

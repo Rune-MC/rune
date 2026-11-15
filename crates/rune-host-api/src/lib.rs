@@ -62,6 +62,7 @@ pub struct Vec3 {
 pub enum HostCommand {
     /// Broadcast a chat message to every online player.
     Broadcast { message: String },
+    RequestReload,
 
     /// Emit a log line into the Paper server log. `script` is the
     /// identity of the originating script (`welcome` for a single file,

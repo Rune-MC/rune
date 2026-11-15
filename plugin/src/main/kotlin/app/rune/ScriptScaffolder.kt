@@ -10,13 +10,11 @@ import java.nio.file.Path
  * `resources/templates/<lang>/`; each file gets its `__SCRIPT_NAME__`
  * placeholder replaced with the user's chosen name.
  *
- * Wired to the in-game `/rune new <name> [lang]` command. Language
- * surface today is only `ts` (libnode backend); structure is set up so
- * adding `py` / `lua` / etc. is a copy-the-template-folder job.
+ * Wired to `/rune new <name> [lang]` for TypeScript and Python.
  */
 class ScriptScaffolder(private val plugin: JavaPlugin) {
 
-    fun availableLanguages(): List<String> = listOf("ts")
+    fun availableLanguages(): List<String> = TEMPLATE_FILES.keys.toList()
 
     /**
      * Result describes what happened so the caller can format a friendly
@@ -26,7 +24,7 @@ class ScriptScaffolder(private val plugin: JavaPlugin) {
     data class Result(val created: Path?, val error: String?)
 
     fun create(scriptsDir: Path, name: String, lang: String): Result {
-        if (name.isBlank() || !name.matches(Regex("^[a-zA-Z0-9._-]+$"))) {
+        if (!name.matches(Regex("^[a-zA-Z0-9_-][a-zA-Z0-9._-]*$"))) {
             return Result(null, "invalid script name '$name' (use letters, digits, '.', '-', '_')")
         }
         if (lang !in availableLanguages()) {
@@ -60,6 +58,7 @@ class ScriptScaffolder(private val plugin: JavaPlugin) {
         // /templates/<lang>/<file> in the plugin jar.
         private val TEMPLATE_FILES: Map<String, List<String>> = mapOf(
             "ts" to listOf("index.ts", "rune.jsonc"),
+            "py" to listOf("index.py"),
         )
     }
 }

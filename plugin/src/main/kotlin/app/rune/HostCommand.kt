@@ -11,6 +11,7 @@ import org.bukkit.event.EventPriority
  */
 sealed class HostCommand {
     data class Broadcast(val message: String) : HostCommand()
+    data object RequestReload : HostCommand()
 
     /** Log a line from a script. `level` is `debug|info|warn|error`. */
     data class Log(

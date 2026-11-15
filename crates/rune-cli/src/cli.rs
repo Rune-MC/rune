@@ -78,6 +78,8 @@ pub struct InitArgs {
 #[derive(clap::ValueEnum, Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Language {
     Typescript,
+    #[value(alias = "py")]
+    Python,
     Wasm,
 }
 
@@ -85,6 +87,7 @@ impl Language {
     pub fn manifest_value(self) -> &'static str {
         match self {
             Language::Typescript => "typescript",
+            Language::Python => "python",
             Language::Wasm => "wasm",
         }
     }
@@ -141,8 +144,8 @@ pub struct PublishArgs {
 
 #[derive(Args, Debug)]
 pub struct AddArgs {
-    /// Rune to install, optionally pinned to a version: `ward` or
-    /// `ward@0.1.0` or `@alice/foo@^1.2`. Without an `@version`, the
+    /// Rune to install, optionally pinned to a version: `welcome` or
+    /// `welcome@0.1.0` or `@alice/foo@^1.2`. Without an `@version`, the
     /// registry's latest released version is used.
     pub spec: String,
 

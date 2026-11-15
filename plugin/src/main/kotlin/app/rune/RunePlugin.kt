@@ -23,6 +23,7 @@ class RunePlugin : JavaPlugin() {
     // are reflected here as the executor drains commands.
     private var subscribedEvents: MutableSet<Pair<String, org.bukkit.event.EventPriority>>? = null
     private var scriptCommands: ScriptCommandRegistry? = null
+    private val scriptStatuses = linkedMapOf<String, String>()
     /**
      * Per-folder library declarations from rune.jsonc. Drives:
      *   * `loadAllScripts` skips folders flagged `library: true`
@@ -142,6 +143,15 @@ class RunePlugin : JavaPlugin() {
             scriptCommands = cmds
 
             val executor = CommandExecutor(this, loader, subs, cmds)
+            var reloadQueued = false
+            executor.onReloadRequested = queueReload@{
+                if (reloadQueued) return@queueReload
+                reloadQueued = true
+                server.globalRegionScheduler.runDelayed(this, { _ ->
+                    reloadQueued = false
+                    if (native === loader) handleReload(server.consoleSender, loader)
+                }, 10L)
+            }
 
             // Build the forwarder before scripts load so the executor's
             // SubscribeEvent handler can immediately wire each new (event,
@@ -183,6 +193,7 @@ class RunePlugin : JavaPlugin() {
     }
 
     override fun onDisable() {
+        AdventurePrimitives.clearBossBars()
         // Time each step so a hang in onDisable shows up as a missing
         // log line. Without this we'd been chasing the wrong section
         // (native close) when the actual blocker may live earlier.
@@ -310,6 +321,19 @@ class RunePlugin : JavaPlugin() {
                     }
                 )
                 .then(
+                    Commands.literal("config")
+                        .executes { ctx -> handleConfig(ctx.source.sender, "") }
+                        .then(
+                            Commands.argument("settings", com.mojang.brigadier.arguments.StringArgumentType.greedyString())
+                                .executes { ctx ->
+                                    handleConfig(
+                                        ctx.source.sender,
+                                        com.mojang.brigadier.arguments.StringArgumentType.getString(ctx, "settings"),
+                                    )
+                                }
+                        )
+                )
+                .then(
                     // /rune new <name> [lang]
                     Commands.literal("new")
                         .then(
@@ -336,7 +360,7 @@ class RunePlugin : JavaPlugin() {
                         )
                 )
                 .executes { ctx ->
-                    ctx.source.sender.sendMessage("Usage: /rune <reload|status|new <name> [lang]>")
+                    ctx.source.sender.sendMessage("Usage: /rune <reload|status|config|new <name> [lang]>")
                     com.mojang.brigadier.Command.SINGLE_SUCCESS
                 }
                 .build()
@@ -383,6 +407,7 @@ class RunePlugin : JavaPlugin() {
         val started = System.nanoTime()
         sender.sendMessage("Reloading Rune scripts...")
         try {
+            AdventurePrimitives.clearBossBars()
             // Wipe state that's keyed against the OLD JS env. The new env
             // starts with no handlers, no refs, no subscriptions -- scripts
             // re-register everything as they re-execute.
@@ -653,6 +678,22 @@ class RunePlugin : JavaPlugin() {
         sender.sendMessage("  refs:          ${refs?.size() ?: "?"}")
         sender.sendMessage("  subscriptions: ${subs?.size ?: "?"}")
         sender.sendMessage("  scripts dir:   ${scriptsDir ?: "?"}")
+        for ((name, status) in scriptStatuses) sender.sendMessage("  $name: $status")
+    }
+
+    private fun handleConfig(sender: CommandSender, settings: String): Int {
+        val loader = native
+        val refs = refRegistry
+        if (loader == null || refs == null) {
+            sender.sendMessage("Rune is not initialised.")
+            return 0
+        }
+        val data = EventEncoder.encode(mapOf(
+            "input" to settings,
+            "sender" to mapOf("__ref" to refs.put(sender), "__class" to sender.javaClass.simpleName),
+        ))
+        return if (loader.dispatchEvent("__rune_admin_config", data) == 0)
+            com.mojang.brigadier.Command.SINGLE_SUCCESS else 0
     }
 
     /**
@@ -666,6 +707,7 @@ class RunePlugin : JavaPlugin() {
      * tsconfig/jsconfig/package.json, and the bundled `rune.d.ts`.
      */
     private fun loadAllScripts(loader: NativeLoader, scriptsDir: Path) {
+        scriptStatuses.clear()
         // Folders flagged `library: true` are mounted under node_modules
         // for other Runes to import but must NOT auto-execute. Compare
         // real paths so junctions / symlinks elsewhere don't confuse us.
@@ -698,11 +740,12 @@ class RunePlugin : JavaPlugin() {
                     Files.isRegularFile(entry) && (
                         lower.endsWith(".js") ||
                         lower.endsWith(".mjs") ||
-                        lower.endsWith(".ts")
+                        lower.endsWith(".ts") ||
+                        lower.endsWith(".py")
                     ) -> entry
-                    Files.isDirectory(entry) -> sequenceOf("index.ts", "index.mjs", "index.js")
-                        .map { entry.resolve(it) }
-                        .firstOrNull { Files.exists(it) }
+                    Files.isDirectory(entry) && listOf(
+                        "rune.toml", "index.ts", "index.mjs", "index.js", "index.py",
+                    ).any { Files.isRegularFile(entry.resolve(it)) } -> entry
                     else -> null
                 }
                 if (toLoad == null) {
@@ -712,8 +755,10 @@ class RunePlugin : JavaPlugin() {
 
                 val rc = loader.loadScript(toLoad)
                 if (rc != 0) {
+                    scriptStatuses[name] = "load failed ($rc), see the server log"
                     logger.warning("loadScript($name) returned $rc")
                 } else {
+                    scriptStatuses[name] = "loaded"
                     logger.info("Loaded script $name")
                 }
             }

@@ -1,0 +1,12 @@
+name = "@rune/vault"
+version = "0.1.0"
+language = "typescript"
+entry = "index.ts"
+description = "Vault balances and payouts for Runes."
+library = true
+
+[publish]
+include = ["index.ts", "rune.toml", "rune.jsonc", "package.json"]
+
+[capabilities]
+required = ["host:plugin:vault"]

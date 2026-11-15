@@ -1,0 +1,12 @@
+name = "@rune/game-kit"
+version = "0.1.0"
+language = "typescript"
+entry = "index.ts"
+description = "Party queues and action-bar display for Paper mini-games."
+library = true
+
+[publish]
+include = ["index.ts", "rune.toml", "rune.jsonc", "package.json"]
+
+[capabilities]
+required = ["host:bukkit"]

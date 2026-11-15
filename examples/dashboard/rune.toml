@@ -1,0 +1,11 @@
+name = "@rune/dashboard"
+version = "0.1.0"
+language = "typescript"
+entry = "index.ts"
+description = "Local operator console for Rune."
+
+[publish]
+include = ["index.ts", "rune.toml", "rune.jsonc", "package.json"]
+
+[capabilities]
+required = ["host:http"]

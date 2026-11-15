@@ -5,10 +5,7 @@
 #   ./new-script.sh --name myscript                          # TS, current server
 #   ./new-script.sh --name myscript --lang ts --server ~/mc
 #
-# Languages currently supported: ts (Node + TypeScript)
-# Future: py (Python), lua (Lua), rs (Rust/Wasm) -- the template tree under
-# install/templates/ scales horizontally; add a new <lang>/ folder and a
-# case below to support a new runtime.
+# Languages: ts (TypeScript) and py (Python).
 
 set -euo pipefail
 
@@ -31,7 +28,10 @@ info() { printf "${cyan}[rune]${reset} %s\n" "$*"; }
 ok()   { printf "${green}[rune]${reset} %s\n" "$*"; }
 err()  { printf "${red}[rune]${reset} %s\n" "$*" >&2; }
 
-if [[ -z "$NAME" ]]; then err "--name is required"; exit 1; fi
+if [[ ! "$NAME" =~ ^[a-zA-Z0-9_-][a-zA-Z0-9._-]*$ || ( "$LANG_" != ts && "$LANG_" != py ) ]]; then
+    err "Use a simple script name and language ts or py."
+    exit 1
+fi
 
 script_dir="$(cd "$(dirname "$0")" && pwd)"
 template_dir="$script_dir/templates/$LANG_"
@@ -64,4 +64,4 @@ ok "Created $dest"
 ok "Files:"
 ls "$dest" | sed 's/^/  /'
 echo
-ok "Run /rune reload in-game to load it (or restart the server)."
+ok "Run rune reload in the server console, or restart Paper to register new commands."

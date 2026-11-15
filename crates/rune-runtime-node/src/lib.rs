@@ -119,7 +119,10 @@ fn build_bootstrap_js(runtime_dir: &Path) -> String {
     // Always forward-slashes for safe JS string literal embedding (Node
     // accepts both forms on Windows).
     let dir = runtime_dir.to_string_lossy().replace('\\', "/");
-    BOOTSTRAP_JS_TEMPLATE.replace("__RUNE_RUNTIME_DIR__", &dir)
+    let mut bootstrap = BOOTSTRAP_JS_TEMPLATE.replace("__RUNE_RUNTIME_DIR__", &dir);
+    bootstrap.push_str(include_str!("extensions.cjs"));
+    bootstrap.push_str(include_str!("adventure.cjs"));
+    bootstrap
 }
 
 const BOOTSTRAP_JS_TEMPLATE: &str = r#"
@@ -302,6 +305,9 @@ function staticClass(className) {
       if (prop in t) return t[prop];
       if (isConstantName(prop)) {
         return reviveRefs(__rune_get_static_field(className, prop));
+      }
+      if (/^[A-Z][a-zA-Z0-9]*$/.test(prop)) {
+        return staticClass(className + '$' + prop);
       }
       return function (...args) {
         return reviveRefs(__rune_invoke_static(className, prop, args));
@@ -581,51 +587,6 @@ globalThis.rune.location = function (world, x, y, z, yaw, pitch) {
     return new bukkit.Location(world, x, y, z);
   }
   return new bukkit.Location(world, x, y, z, yaw ?? 0, pitch ?? 0);
-};
-
-// ---------------------------------------------------------------------------
-// Message helpers -- MiniMessage parse + send / title / actionBar.
-//
-// All accept MiniMessage syntax (`<gold>`, `<gradient:red:blue>`, etc.).
-// `rune.msg` takes any Audience (player, world, command sender, server...)
-// OR an array of audiences. `rune.mm` is the bare parser when you need
-// the Component for chaining (e.g. `Component.text("X").append(rune.mm(...))`).
-// ---------------------------------------------------------------------------
-
-globalThis.rune.mm = function (template) {
-  return mm.MiniMessage.miniMessage().deserialize(String(template ?? ''));
-};
-
-globalThis.rune.msg = function (audience, template) {
-  const comp = rune.mm(template);
-  if (Array.isArray(audience)) {
-    for (const a of audience) a.sendMessage(comp);
-  } else {
-    audience.sendMessage(comp);
-  }
-};
-
-/**
- * Show a title to `player`. All times are in ms; defaults match vanilla
- * (500/3000/500). `subtitle` may be omitted.
- *
- *   rune.title(player, "<red><bold>BOSS FIGHT");
- *   rune.title(player, "Welcome", "<gray>...to the server", { stayMs: 5000 });
- */
-globalThis.rune.title = function (player, title, subtitle, opts) {
-  const Title = kyori.adventure.title.Title;
-  const Duration = java.time.Duration;
-  const titleComp = rune.mm(title ?? '');
-  const subComp = rune.mm(subtitle ?? '');
-  const fadeIn = Duration.ofMillis(opts?.fadeInMs ?? 500);
-  const stay = Duration.ofMillis(opts?.stayMs ?? 3000);
-  const fadeOut = Duration.ofMillis(opts?.fadeOutMs ?? 500);
-  const times = Title.Times.times(fadeIn, stay, fadeOut);
-  player.showTitle(Title.title(titleComp, subComp, times));
-};
-
-globalThis.rune.actionBar = function (player, template) {
-  player.sendActionBar(rune.mm(template));
 };
 
 // ---------------------------------------------------------------------------
@@ -2487,7 +2448,7 @@ globalThis.__runeDispatch = function (name, payload) {
     }
   }
   const list = handlers.get(eventName);
-  if (!list) return;
+  if (!list && name !== '__rune_admin_config') return;
 
   let revived = payload;
   if (payload instanceof Uint8Array && typeof globalThis.__rune_decode_event === 'function') {
@@ -2495,6 +2456,10 @@ globalThis.__runeDispatch = function (name, payload) {
     catch (_) { revived = payload; }
   } else if (payload && typeof payload === 'object') {
     revived = reviveRefs(payload);
+  }
+  if (name === '__rune_admin_config') {
+    runeExtensions.configCommand(revived);
+    return;
   }
 
   // ignoreCancelled is implemented JS-side rather than at Bukkit
@@ -2549,7 +2514,7 @@ globalThis.__rune_load_script = async function (path) {
   const url = pathToFileURL(path).href;
   // Cache-bust on reload so the same path re-imports fresh. Node's
   // ESM loader keys the cache on the full URL including query string.
-  return import(url + '?t=' + Date.now());
+  return runeExtensions.load(path, () => import(url + '?t=' + Date.now()));
 };
 
 __rune_log_info('rune-node runtime initialised');

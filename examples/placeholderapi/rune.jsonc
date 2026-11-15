@@ -1,0 +1,10 @@
+{
+  "name": "@rune/placeholderapi",
+  "library": true,
+  "plugins": {
+    "PlaceholderAPI": {
+      "package": "me.clip.placeholderapi",
+      "required": false
+    }
+  }
+}

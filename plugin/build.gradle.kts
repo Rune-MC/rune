@@ -124,6 +124,12 @@ fun resolveLibnodeRoot(): java.io.File? {
 }
 
 tasks {
+    processResources {
+        from(rootProject.projectDir.parentFile.resolve("install/templates/py")) {
+            into("templates/py")
+        }
+    }
+
     shadowJar {
         archiveClassifier.set("")
         archiveFileName.set("rune-${project.version}.jar")

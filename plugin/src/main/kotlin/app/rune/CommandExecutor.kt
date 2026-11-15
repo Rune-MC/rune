@@ -28,6 +28,7 @@ class CommandExecutor(
      * up a Bukkit listener at the requested priority.
      */
     var onSubscribe: ((String, org.bukkit.event.EventPriority) -> Unit)? = null
+    var onReloadRequested: (() -> Unit)? = null
 
     fun start() {
         // The Consumer<ScheduledTask> parameter is ignored; we only need
@@ -55,6 +56,7 @@ class CommandExecutor(
 
     private fun execute(cmd: HostCommand) {
         when (cmd) {
+            HostCommand.RequestReload -> onReloadRequested?.invoke()
             is HostCommand.Broadcast -> {
                 plugin.server.broadcast(Component.text(cmd.message))
             }

@@ -34,6 +34,8 @@ export {};
 declare global {
     const rune: RuneApi;
     const console: RuneConsole;
+    type RuneMessage = string | Component;
+    type RuneAudience = Audience | readonly Audience[];
 
     // Top-level Java package roots. The fully-typed entries (`bukkit`,
     // `paper`, `kyori`) are declared as TS namespaces in the auto-generated
@@ -85,6 +87,28 @@ interface JavaClass<T = any> {
 interface RuneApi {
     /** Broadcast a chat message to every online player. */
     broadcast(message: string): void;
+
+    /** Publish or discover a runtime service by namespaced ID and major version. */
+    readonly services: {
+        provide<T extends object>(id: string, major: number, service: T): () => void;
+        get<T extends object>(id: string, major: number): T | undefined;
+    };
+
+    /** Events between Runes. Payloads are cloned for each subscriber. */
+    readonly events: {
+        on<T>(topic: string, handler: (payload: T) => void | Promise<void>): () => void;
+        emit<T>(topic: string, payload: T): Promise<void>;
+    };
+
+    config<T extends Record<string, RuneSettingValue>>(
+        id: string,
+        fields: { [K in keyof T]: RuneSetting<T[K]> },
+    ): RuneSettings<{ -readonly [K in keyof T]: WidenRuneSetting<T[K]> }>;
+
+    readonly dashboard: {
+        panel(id: string, title: string, read: () => Record<string, RuneSettingValue>): () => void;
+        start(options: { port?: number; token: string }): Server;
+    };
 
     /**
      * Subscribe to a Bukkit event. Preferred form uses the typed
@@ -190,26 +214,46 @@ interface RuneApi {
     ): Location;
 
     // ---------------- Message helpers ----------------
+    /** Adventure Components, messaging, and commonly used Adventure types. */
+    readonly adventure: RuneAdventure;
+
     /**
      * Parse MiniMessage to an Adventure Component. Used internally by
      * `msg` / `title` / `actionBar` and the `item().name(...)` builder;
      * exposed so scripts can pre-build components for re-use.
      */
-    mm(template: string): any;
+    mm(template: string, values?: Record<string, RuneMessage | number | boolean>): Component;
     /** Send a MiniMessage-formatted line. `audience` may be a single ref or array. */
-    msg(audience: any | any[], template: string): void;
+    msg(audience: RuneAudience, template: RuneMessage): void;
     /**
      * Show a title to `player`. All durations are in ms; defaults are
      * 500 / 3000 / 500.
      */
     title(
-        player: Player,
-        title: string,
-        subtitle?: string,
-        opts?: { fadeInMs?: number; stayMs?: number; fadeOutMs?: number },
+        player: RuneAudience,
+        title: RuneMessage,
+        subtitle?: RuneMessage,
+        opts?: RuneTitleTimes,
     ): void;
     /** Push a MiniMessage-formatted action-bar line. */
-    actionBar(player: Player, template: string): void;
+    actionBar(player: RuneAudience, template: RuneMessage): void;
+
+    player(nameOrUuid: string): Player | null;
+    players(predicate?: (player: Player) => boolean): Player[];
+    world(name: string): World | null;
+    vector(x: number, y: number, z: number): bukkit.util.Vector;
+    blockAt(world: World, x: number, y: number, z: number): Block;
+    readonly types: {
+        Location: typeof bukkit.Location;
+        Vector: typeof bukkit.util.Vector;
+        NamespacedKey: typeof bukkit.NamespacedKey;
+        ItemStack: typeof bukkit.inventory.ItemStack;
+        Material: typeof bukkit.Material;
+        EntityType: typeof bukkit.entity.EntityType;
+        GameMode: typeof bukkit.GameMode;
+        PotionEffect: typeof bukkit.potion.PotionEffect;
+        PotionEffectType: typeof bukkit.potion.PotionEffectType;
+    };
 
     // ---------------- Builders ----------------
     /**
@@ -508,6 +552,77 @@ interface ServeContext {
 }
 
 }  // end declare global
+
+interface RuneTitleTimes { fadeInMs?: number; stayMs?: number; fadeOutMs?: number }
+type RuneSoundSource = "master" | "music" | "record" | "weather" | "block" |
+    "hostile" | "neutral" | "player" | "ambient" | "voice";
+interface RuneSoundOptions { source?: RuneSoundSource; volume?: number; pitch?: number }
+type RuneBossBar = kyori.adventure.bossbar.BossBar;
+type RuneSound = kyori.adventure.sound.Sound;
+type RuneBook = kyori.adventure.inventory.Book;
+
+interface RuneAdventure {
+    text(value?: string | number | boolean, color?: string): Component;
+    miniMessage(template: string, values?: Record<string, RuneMessage | number | boolean>): Component;
+    format(parts: TemplateStringsArray, ...values: (RuneMessage | number | boolean)[]): Component;
+    serialize(message: RuneMessage, format?: "plain" | "minimessage" | "legacy" | "json"): string;
+    join(parts: readonly RuneMessage[], separator?: RuneMessage): Component;
+    translate(key: string, ...args: RuneMessage[]): Component;
+    hover(message: RuneMessage, tooltip: RuneMessage): Component;
+    click(message: RuneMessage, action: "open_url" | "open_file" | "run_command" |
+        "suggest_command" | "change_page" | "copy_to_clipboard", value: string): Component;
+    audience(...targets: RuneAudience[]): Audience;
+    /** Plain strings are literal. Pass a Component to send formatted text. */
+    send(target: RuneAudience, message: RuneMessage): void;
+    broadcast(message: RuneMessage): number;
+    actionBar(target: RuneAudience, message: RuneMessage): void;
+    title(target: RuneAudience, title: RuneMessage, subtitle?: RuneMessage, timings?: RuneTitleTimes): void;
+    clearTitle(target: RuneAudience): void;
+    tabList(target: RuneAudience, header: RuneMessage, footer?: RuneMessage): void;
+    bossBar(title: RuneMessage, options?: {
+        progress?: number;
+        color?: "pink" | "blue" | "red" | "green" | "yellow" | "purple" | "white";
+        overlay?: "progress" | "notched_6" | "notched_10" | "notched_12" | "notched_20";
+    }): RuneBossBar;
+    showBossBar(target: RuneAudience, bar: RuneBossBar): void;
+    hideBossBar(target: RuneAudience, bar: RuneBossBar): void;
+    sound(key: string, options?: RuneSoundOptions): RuneSound;
+    playSound(target: RuneAudience, sound: RuneSound | string, options?: RuneSoundOptions): void;
+    stopSound(target: RuneAudience, key?: string, source?: RuneSoundSource): void;
+    book(title: RuneMessage, author: RuneMessage, pages: readonly RuneMessage[]): RuneBook;
+    openBook(target: RuneAudience, book: RuneBook): void;
+    readonly Component: typeof kyori.adventure.text.Component;
+    readonly TextColor: typeof kyori.adventure.text.format.TextColor;
+    readonly NamedTextColor: typeof kyori.adventure.text.format.NamedTextColor;
+    readonly TextDecoration: typeof kyori.adventure.text.format.TextDecoration;
+    readonly Style: typeof kyori.adventure.text.format.Style;
+    readonly ClickEvent: typeof kyori.adventure.text.event.ClickEvent;
+    readonly HoverEvent: typeof kyori.adventure.text.event.HoverEvent;
+    readonly Key: typeof kyori.adventure.key.Key;
+    readonly MiniMessage: typeof kyori.adventure.text.minimessage.MiniMessage;
+    readonly TagResolver: typeof kyori.adventure.text.minimessage.tag.resolver.TagResolver;
+    readonly Placeholder: typeof kyori.adventure.text.minimessage.tag.resolver.Placeholder;
+    readonly Audience: typeof kyori.adventure.audience.Audience;
+    readonly Title: typeof kyori.adventure.title.Title;
+    readonly BossBar: typeof kyori.adventure.bossbar.BossBar;
+    readonly Sound: typeof kyori.adventure.sound.Sound;
+    readonly SoundStop: typeof kyori.adventure.sound.SoundStop;
+    readonly Book: typeof kyori.adventure.inventory.Book;
+}
+
+type RuneSettingValue = string | number | boolean;
+type WidenRuneSetting<T> = T extends string ? string : T extends number ? number : boolean;
+interface RuneSetting<T extends RuneSettingValue> {
+    default: T;
+    label?: string;
+    description?: string;
+    min?: number;
+    max?: number;
+}
+interface RuneSettings<T> {
+    read(): T;
+    update(values: Partial<T>): T;
+}
 
 interface BukkitStatic {
     broadcastMessage(message: string): number;

@@ -1,0 +1,14 @@
+{
+  "name": "@rune/worldguard",
+  "library": true,
+  "plugins": {
+    "WorldGuard": {
+      "package": "com.sk89q.worldguard",
+      "required": false
+    },
+    "WorldEdit": {
+      "package": "com.sk89q.worldedit",
+      "required": false
+    }
+  }
+}

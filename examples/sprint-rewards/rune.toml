@@ -1,0 +1,15 @@
+name = "@rune/sprint-rewards"
+version = "0.1.0"
+language = "typescript"
+entry = "index.ts"
+description = "Vault rewards and a win-based quest for Sprint Arena."
+
+[publish]
+include = ["index.ts", "rune.toml", "rune.jsonc", "package.json"]
+
+[capabilities]
+required = ["host:plugin:vault","host:store","host:bukkit"]
+
+[dependencies]
+"@rune/sprint-arena" = "^0.1.0"
+"@rune/vault" = "^0.1.0"

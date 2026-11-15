@@ -2,6 +2,10 @@
 
 Polyglot scripting platform for Paper Minecraft servers. Write plugins in TypeScript with full Bukkit/Paper API access — no Java, no rebuilds, hot-reloadable.
 
+Python 3 Runes can react to Bukkit event snapshots and register commands using
+the optional CPython backend. Install Python on the server or set
+`RUNE_PYTHON` to the interpreter's executable path.
+
 ```ts
 @Listener
 export class Welcome {
@@ -90,3 +94,40 @@ The prebuilts repo's CI builds libnode from source for every supported platform 
 * `DESIGN_SPEC.md` -- architecture + invariants.
 * `install/README.md` -- end-user install + script scaffolding.
 * In-game: `/rune help`.
+* [Sprint Arena and integration examples](examples/README.md).
+
+### Python
+
+From the server's `plugins/Rune/scripts/` directory, run
+`rune init hello-python --language python`, or run `rune new hello-python py`
+from the server console. Reload from the console. Restart Paper when adding or
+changing a command's name or shape.
+
+```python
+from rune import broadcast, on
+
+@on("PlayerJoinEvent")
+def welcome(event):
+    broadcast(f"Welcome, {event['player']['name']}!")
+```
+
+Python workers receive snapshots asynchronously and expose `on`, `command`,
+`broadcast`, and `log`. They run as the server user. TypeScript uses the
+embedded Node runtime for live JVM interop.
+
+### Adventure and Paper primitives
+
+```typescript
+const { adventure } = rune;
+rune.on(Events.PlayerJoinEvent, (event) => {
+  const player = event.getPlayer();
+  const welcome = adventure.format`<gold>Welcome, ${player.getName()}!</gold>`;
+  adventure.send(player, welcome);
+  adventure.title(player, welcome, "Glad you're here");
+});
+```
+
+`rune.adventure` includes action bars, sounds, boss bars, tab lists, books,
+component formatting, and commonly used Adventure classes. Plain strings stay
+literal. Use MiniMessage or the template tag for formatting. Use `rune.types`,
+`rune.player`, `rune.world`, `rune.vector`, and `rune.blockAt` for common Paper objects.

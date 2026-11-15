@@ -897,6 +897,14 @@ void JS_GetStaticField(const v8::FunctionCallbackInfo<v8::Value>& args) {
   args.GetReturnValue().Set(CallQuery(isolate, context, GetRune(args), q));
 }
 
+void JS_RequestReload(const v8::FunctionCallbackInfo<v8::Value>& args) {
+  std::vector<uint8_t> bytes;
+  bytes.push_back(0xa1);  // CBOR map with one property.
+  cbor_text(bytes, "op");
+  cbor_text(bytes, "request_reload");
+  EnqueueCommand(GetRune(args), std::move(bytes));
+}
+
 // __rune_broadcast(message: string) -> undefined
 //
 // CBOR shape: { "op": "broadcast", "message": <string> }
@@ -1116,6 +1124,7 @@ void InstallNativeOps(v8::Isolate* isolate,
   };
 
   bind("__rune_broadcast", JS_Broadcast);
+  bind("__rune_request_reload", JS_RequestReload);
   bind("__rune_log_debug", JS_LogDebug);
   bind("__rune_log_info", JS_LogInfo);
   bind("__rune_log_warn", JS_LogWarn);

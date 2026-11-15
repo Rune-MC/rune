@@ -1,0 +1,12 @@
+name = "@rune/worldguard"
+version = "0.1.0"
+language = "typescript"
+entry = "index.ts"
+description = "Query WorldGuard regions from a Rune."
+library = true
+
+[publish]
+include = ["index.ts", "rune.toml", "rune.jsonc", "package.json"]
+
+[capabilities]
+required = ["host:plugin:worldguard","host:plugin:worldedit"]
