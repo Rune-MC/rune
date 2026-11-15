@@ -1,5 +1,5 @@
 name = "@rune/warps"
-version = "0.1.0"
+version = "0.1.1"
 language = "typescript"
 entry = "index.ts"
 description = "Shared server warps with restricted access and operator management."
@@ -13,3 +13,4 @@ required = ["host:bukkit"]
 
 [dependencies]
 "@rune/positions" = "^0.1.0"
+"@rune/storage" = "^0.1.1"

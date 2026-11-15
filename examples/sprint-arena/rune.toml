@@ -5,10 +5,11 @@ entry = "index.ts"
 description = "A timed parkour race starter with settings, a queue, and a dashboard panel."
 
 [publish]
-include = ["index.ts", "rune.toml", "rune.jsonc", "package.json"]
+include = ["*.ts", "rune.toml", "rune.jsonc", "package.json"]
 
 [capabilities]
 required = ["host:bukkit","host:store"]
 
 [dependencies]
 "@rune/game-kit" = "^0.1.0"
+"@rune/storage" = "^0.1.1"

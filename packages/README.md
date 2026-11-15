@@ -9,7 +9,7 @@ listeners through Rune's decorators. Install from a Paper server with
 | `web-auth` | Password auth, revocable JWTs or opaque sessions, recovery, and Fetch handlers |
 | `storage` | Atomic record and typed document interfaces |
 | `mongo`, `mysql`, `postgres`, `sqlite`, `redis` | Database adapters |
-| `permissions` | Persistent role groups, inherited permissions, explicit denies, and optional shared DB |
+| `permissions` | Permission groups, timed and scoped grants, Adventure labels, promotion tracks, and audit history |
 | `anticheat` | Alert-first movement and combat monitoring |
 | `npcs` | Persistent named villagers, dialogue, and interaction events |
 | `homes`, `warps` | Private and shared destinations |
@@ -17,6 +17,8 @@ listeners through Rune's decorators. Install from a Paper server with
 | `cooldowns`, `rate-limit`, `pagination`, `positions` | Reusable application and Paper helpers |
 
 Each package directory has examples, configuration, and command details.
+The Paper packages with persisted data also support local storage, a
+shared connection, or their own database. [Storage settings](storage/README.md#share-an-open-database-on-paper)
 
 ## Verification
 

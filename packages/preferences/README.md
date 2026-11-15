@@ -1,5 +1,8 @@
 # Preferences
 
+Choose storage with `RUNE_PREFERENCES_STORAGE`. Use `local`, `reuse:<name>`,
+or `connect` with `RUNE_PREFERENCES_DB_URL`. [Storage configuration](https://github.com/Rune-MC/rune/tree/main/packages/storage#share-an-open-database-on-paper)
+
 `rune add @rune/preferences`, then restart Paper.
 
 `/preferences` shows your current values. Run `/preferences announcements`,

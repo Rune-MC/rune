@@ -1,5 +1,8 @@
 # NPCs
 
+Choose storage with `RUNE_NPCS_STORAGE`. Use `local`, `reuse:<name>`,
+or `connect` with `RUNE_NPCS_DB_URL`. [Storage configuration](https://github.com/Rune-MC/rune/tree/main/packages/storage#share-an-open-database-on-paper)
+
 `rune add @rune/npcs`, then restart Paper.
 
 - `/npc create guide Town Guide` places a named villager where you stand.

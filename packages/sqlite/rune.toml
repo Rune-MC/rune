@@ -1,5 +1,5 @@
 name = "@rune/sqlite"
-version = "0.1.0"
+version = "0.1.1"
 language = "typescript"
 entry = "index.ts"
 description = "File-backed SQLite adapter for Rune storage with no native npm dependency."
@@ -10,4 +10,4 @@ library = true
 include = ["*.ts", "rune.toml", "rune.jsonc", "package.json", "README.md"]
 
 [dependencies]
-"@rune/storage" = "^0.1.0"
+"@rune/storage" = "^0.1.1"

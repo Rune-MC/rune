@@ -16,3 +16,6 @@ await visits.update((value) => ({ total: value.total + 1 }));
 
 Wrap an existing driver instance with `redisStore(client)`.
 Use `db.store` with Web Auth, or as a general-purpose record store.
+
+Pass `{ name: "shared" }` to `connect` to make the existing connection
+reusable by other Runes. [Storage configuration](https://github.com/Rune-MC/rune/tree/main/packages/storage#share-an-open-database-on-paper)

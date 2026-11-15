@@ -1,3 +1,4 @@
+import { shareConnection, type ConnectionOptions } from "@rune/storage";
 import { type RecordStore, type StoredRecord } from "@rune/storage";
 import { createClient } from "redis";
 
@@ -44,12 +45,12 @@ export function redisStore(client: RedisConnection, prefix = "rune:storage:"): R
   };
 }
 
-export async function connect(uri: string, options: { prefix?: string } = {}) {
+export async function connect(uri: string, options: ConnectionOptions & { prefix?: string } = {}) {
   const client = createClient({ url: uri, disableOfflineQueue: true, socket: { connectTimeout: 5000, reconnectStrategy: false } });
   client.on("error", () => { /* Connection and command failures are returned to their caller. */ });
   try {
     await client.connect();
-    return { client, store: redisStore(client, options.prefix), close: () => client.close() };
+    return shareConnection({ client, store: redisStore(client, options.prefix), close: () => client.close() }, "redis", options.name);
   } catch (error) {
     if (client.isOpen) client.destroy();
     throw error;

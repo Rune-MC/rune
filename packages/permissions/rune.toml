@@ -1,15 +1,15 @@
 name = "@rune/permissions"
-version = "0.1.0"
+version = "0.2.0"
 language = "typescript"
 entry = "index.ts"
-description = "Persistent Bukkit permission groups, inheritance, denies, and per-player membership."
+description = "Scoped permissions, temporary ranks, promotion tracks, audit logs, and Adventure player labels."
 license = "Apache-2.0"
 
 [publish]
-include = ["*.ts", "rune.toml", "rune.jsonc", "package.json", "README.md"]
+include = ["*.ts", "commands/*.ts", "rune.toml", "rune.jsonc", "package.json", "README.md"]
 
 [capabilities]
 required = ["host:bukkit"]
 
 [dependencies]
-"@rune/storage" = "^0.1.0"
+"@rune/storage" = "^0.1.1"

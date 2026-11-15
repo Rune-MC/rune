@@ -29,6 +29,9 @@ directory to package any of the other examples.
 
 View settings with `/rune config sprint-arena`. For example,
 `/rune config sprint-arena round-seconds 60` adjusts future rounds.
+Install `@rune/storage` for the arena's persistent settings and scores.
+Use `RUNE_SPRINT_ARENA_STORAGE` to choose its storage.
+[Storage settings](../packages/storage/README.md#share-an-open-database-on-paper)
 
 ## Use the dashboard
 

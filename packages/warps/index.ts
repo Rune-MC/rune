@@ -1,7 +1,8 @@
 import { normalizePositionName, snapshot, teleportTo, type Position } from "@rune/positions";
+import { paperRecords, StorageInputError } from "@rune/storage";
 
 interface Warp { point: Position; restricted: boolean }
-const warps = rune.store("rune-warps");
+const warps = paperRecords<Warp>(rune, "warps", "rune-warps");
 const canVisit = (sender: CommandCtx["sender"], name: string, warp: Warp) =>
   !warp.restricted || sender.isOp() || sender.hasPermission("rune.warp." + name);
 
@@ -17,17 +18,16 @@ export class VisitWarp {
   @Run
   run(ctx: CommandCtx) {
     if (this.destination == null) {
-      const available = warps.keys().filter((name) => {
-        const warp = warps.get<Warp>(name);
-        return warp && canVisit(ctx.sender, name, warp);
-      }).sort();
+      const available = Object.entries(warps.value()).filter(([name, warp]) => canVisit(ctx.sender, name, warp))
+        .map(([name]) => name).sort();
       ctx.sender.sendMessage(available.length ? "Warps: " + available.join(", ") : "No warps are available.");
       return;
     }
     if (!ctx.sender.isPlayer) { ctx.sender.sendMessage("Run this command in game."); return; }
     const name = warpName(ctx, this.destination);
     if (!name) return;
-    const warp = warps.get<Warp>(name);
+    const data = warps.value();
+    const warp = Object.hasOwn(data, name) ? data[name] : undefined;
     if (!warp || !canVisit(ctx.sender, name, warp)) { ctx.sender.sendMessage("Warp unavailable."); return; }
     if (!teleportTo(ctx.sender as unknown as Player, warp.point).ok) ctx.sender.sendMessage("Could not teleport.");
   }
@@ -42,9 +42,13 @@ export class SaveWarp {
       const name = warpName(ctx, this.name);
       if (!name) return;
       const player = ctx.sender as unknown as Player;
-      const restricted = this.restricted ?? warps.get<Warp>(name)?.restricted ?? false;
-      warps.set<Warp>(name, { point: snapshot(player.getLocation()), restricted });
-      ctx.sender.sendMessage(`Saved ${restricted ? "restricted " : ""}warp ${name}.`);
+      const point = snapshot(player.getLocation());
+      warps.edit((data) => {
+        const restricted = this.restricted ?? data[name]?.restricted ?? false;
+        data[name] = { point, restricted };
+        return restricted;
+      }, (restricted) => ctx.sender.sendMessage(`Saved ${restricted ? "restricted " : ""}warp ${name}.`),
+      (message) => ctx.sender.sendMessage(message));
   }
 }
 
@@ -54,8 +58,9 @@ export class DeleteWarp {
   @Run run(ctx: CommandCtx) {
       const name = warpName(ctx, this.name);
       if (!name) return;
-      if (!warps.has(name)) { ctx.sender.sendMessage("Warp not found."); return; }
-      warps.delete(name);
-      ctx.sender.sendMessage(`Deleted warp ${name}.`);
+      warps.edit((data) => {
+        if (!Object.hasOwn(data, name)) throw new StorageInputError("Warp not found.");
+        delete data[name];
+      }, () => ctx.sender.sendMessage(`Deleted warp ${name}.`), (message) => ctx.sender.sendMessage(message));
   }
 }

@@ -1,3 +1,4 @@
+import { shareConnection, type ConnectionOptions } from "@rune/storage";
 import { sqlStore, type SqlExecutor, type Value } from "@rune/storage";
 import mysql from "mysql2/promise";
 
@@ -18,11 +19,11 @@ export function mysqlStore(pool: MysqlConnection, table?: string) {
   }, table);
 }
 
-export async function connect(uri: string, options: { table?: string } = {}) {
+export async function connect(uri: string, options: ConnectionOptions & { table?: string } = {}) {
   const pool = mysql.createPool({ uri, connectionLimit: 4, connectTimeout: 5000, enableKeepAlive: true });
   try {
     const store = await mysqlStore(pool, options.table);
-    return { pool, store, close: () => pool.end() };
+    return shareConnection({ pool, store, close: () => pool.end() }, "mysql", options.name);
   } catch (error) {
     await pool.end();
     throw error;

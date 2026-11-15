@@ -1,5 +1,5 @@
 name = "@rune/npcs"
-version = "0.1.0"
+version = "0.1.1"
 language = "typescript"
 entry = "index.ts"
 description = "Persistent mob NPCs with dialogue, safe interaction events, and operator commands."
@@ -13,3 +13,4 @@ required = ["host:bukkit"]
 
 [dependencies]
 "@rune/positions" = "^0.1.0"
+"@rune/storage" = "^0.1.1"

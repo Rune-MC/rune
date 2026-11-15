@@ -2,7 +2,7 @@
 
 `rune add @rune/sqlite`
 
-Use a pathname, a file URL, or `:memory:` in tests. The adapter uses Node’s built-in SQLite module. Keep the database on local persistent storage. It enables WAL and retries a busy database for up to five seconds.
+Use a pathname, a file URL, or `:memory:` in tests. The adapter uses Nodeâ€™s built-in SQLite module. Keep the database on local persistent storage. It enables WAL and retries a busy database for up to five seconds.
 
 ```typescript
 import { connect } from "@rune/sqlite";
@@ -16,3 +16,6 @@ await visits.update((value) => ({ total: value.total + 1 }));
 
 Wrap an existing driver instance with `sqliteStore(database)`.
 Use `db.store` with Web Auth, or as a general-purpose record store.
+
+Pass `{ name: "shared" }` to `connect` to make the existing connection
+reusable by other Runes. [Storage configuration](https://github.com/Rune-MC/rune/tree/main/packages/storage#share-an-open-database-on-paper)

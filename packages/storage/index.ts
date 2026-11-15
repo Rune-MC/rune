@@ -1,4 +1,6 @@
 import { randomBytes } from "node:crypto";
+export * from "./connections.ts";
+export { paperStore, paperRecords, StorageInputError } from "./paper.ts";
 
 export interface StoredRecord {
   revision: string;

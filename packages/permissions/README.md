@@ -1,44 +1,85 @@
 # Permissions
 
-`rune add @rune/permissions`, then restart Paper.
+Install with `rune add @rune/permissions` and restart Paper. For an
+existing installation, run `rune update @rune/storage` before
+`rune update @rune/permissions`. Upgrade any installed database adapter as
+well. Existing groups, direct memberships, and storage settings still work.
+
+## Groups and player labels
 
 ```text
 /permissions create builder
-/permissions rule builder example.build allow
-/permissions rule builder example.admin deny
+/permissions weight builder 20
+/permissions prefix builder 100 <green>[Builder]</green>
+/permissions suffix builder 20 <gray>Architect</gray>
 /permissions member Alice builder true
-/permissions create architect
-/permissions inherit architect builder true
 /permissions inspect Alice
 ```
 
-Group membership uses UUIDs. The `default` group always applies. Add an
-exact Bukkit permission with `allow` or `deny`, and remove its rule with
-`unset`. Denies win when two of this Rune's groups disagree. Group
-inheritance is transitive and cycles are rejected. Pass `false` to remove a
-membership or parent. `/permissions delete <group>` removes a group and
-its inherited links and memberships.
+Higher label priorities win. By default, Permissions decorates both the
+Paper display name and tab list. Team colors and custom chat renderers can
+set their own presentation. Use `/rune config permissions` to turn either
+output off. Turn on `stack-prefixes` or `stack-suffixes` to display ranked
+labels from multiple groups with duplicate text removed.
 
-Edit commands are limited to server operators. Use one permission manager
-for a given set of nodes. The `permissions` service (major version 1)
-exposes resolved `groups(uuid)` and `rules(uuid)` for other Runes.
+Use `-` as the label text to remove the priority slot.
+`/permissions label "user:Alice" prefix 150 global <gold>[Founder]</gold>`
+sets a user label. Use `"world=hub"` to scope a label.
+Use `group:<group>` as the subject for a scoped group label.
 
-## Database storage
+## Scoped access
 
-Permissions uses Rune's local store by default. To share state across servers,
-install the adapter that matches your URL, set `RUNE_PERMISSIONS_DB_URL` in
-the Paper process environment, and restart each server.
+```text
+/permissions rule builder "example.build.*" allow
+/permissions user-rule Alice example.build.delete deny "world=spawn" 2h
+/permissions grant Alice builder "server=survival,world=world" 7d
+/permissions revoke Alice builder "server=survival,world=world"
+/permissions inherit architect builder true
+/permissions explain Alice example.build.delete "world=spawn"
+```
 
-| URL scheme | Install |
-| --- | --- |
-| `file:` | `rune add @rune/sqlite` |
-| `mysql:` | `rune add @rune/mysql` |
-| `mongodb:`, `mongodb+srv:` | `rune add @rune/mongo` |
-| `postgres:`, `postgresql:` | `rune add @rune/postgres` |
-| `redis:`, `rediss:` | `rune add @rune/redis` |
+Rules and grants accept `global`, `"world=name"`, `"server=name"`, or a
+combined context. Set `RUNE_PERMISSIONS_SERVER` to a different name for
+each Paper process sharing the same database. Accepted durations include
+`30m`, `2h`, `7d`, and `permanent`. Commands taking the `player`
+argument accept online names or offline UUIDs. Use `unset` to remove a
+rule in the specified context.
 
-The database has independent state from an existing local store. Every
-database update uses compare-and-swap. Other servers pick up changes on
-their next poll, normally within five seconds. After sustained database
-failure, this Rune clears its own cached permission grants until it can
-read a valid snapshot again.
+Permission decisions favor direct user rules, then more specific
+contexts, more specific nodes, and higher group weight. Denies win equal
+matches. Wildcards apply to registered Bukkit permission nodes and
+explicit nodes in the same profile. Other Runes can check additional nodes
+through the service. Everyone inherits the `default` group.
+
+## Promotions, audit, and integrations
+
+```text
+/permissions track-set builders builder architect
+/permissions promote Alice builders
+/permissions demote Alice builders
+/permissions primary Alice architect
+/permissions audit 10
+```
+
+Tracks update permanent, global membership. They leave scoped and
+temporary grants in place. The audit log keeps the latest 200 successful
+edits. Only server operators can modify permissions.
+
+The `permissions` service (major version 1) exposes `groups(uuid, context)`,
+`rules(uuid, context)`, `check(uuid, node, context)`,
+`explain(uuid, node, context)`, and `meta(uuid, context)`. The last method
+returns the primary group and ordered MiniMessage prefix and suffix arrays.
+
+## Storage
+
+Set `RUNE_PERMISSIONS_STORAGE` to `local`, `reuse:<name>`, or
+`connect`. For a new connection, install the relevant database adapter
+and set `RUNE_PERMISSIONS_DB_URL`. These options use the shared connection
+registry and retain options from previous versions, including a DB URL on
+its own. [Storage configuration](https://github.com/Rune-MC/rune/tree/main/packages/storage#share-an-open-database-on-paper)
+
+Changes reach other servers on their next poll, usually within five
+seconds. After a sustained database outage, Permissions clears the
+permissions and labels it applied until the database becomes available.
+Back up your database and restart all servers using it when upgrading the
+Permissions Rune.

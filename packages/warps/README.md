@@ -1,5 +1,8 @@
 # Warps
 
+Choose storage with `RUNE_WARPS_STORAGE`. Use `local`, `reuse:<name>`,
+or `connect` with `RUNE_WARPS_DB_URL`. [Storage configuration](https://github.com/Rune-MC/rune/tree/main/packages/storage#share-an-open-database-on-paper)
+
 `rune add @rune/warps`, then restart Paper.
 
 - `/warp` lists destinations you can visit.

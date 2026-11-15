@@ -1,3 +1,4 @@
+import { shareConnection, type ConnectionOptions } from "@rune/storage";
 import { sqlStore, type SqlExecutor, type Value } from "@rune/storage";
 import { DatabaseSync } from "node:sqlite";
 import { fileURLToPath } from "node:url";
@@ -20,12 +21,12 @@ export function sqliteStore(db: SqliteDatabase, table?: string) {
   }, table);
 }
 
-export async function connect(path: string, options: { table?: string } = {}) {
+export async function connect(path: string, options: ConnectionOptions & { table?: string } = {}) {
   const db = new DatabaseSync(path.startsWith("file:") ? fileURLToPath(path) : path);
   try {
     db.exec("PRAGMA journal_mode = WAL; PRAGMA busy_timeout = 5000");
     const store = await sqliteStore(db, options.table);
-    return { database: db, store, async close() { db.close(); } };
+    return shareConnection({ database: db, store, async close() { db.close(); } }, "sqlite", options.name);
   } catch (error) {
     db.close();
     throw error;

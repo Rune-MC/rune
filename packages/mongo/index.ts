@@ -1,3 +1,4 @@
+import { shareConnection, type ConnectionOptions } from "@rune/storage";
 import { errorCode, type RecordStore, type StoredRecord } from "@rune/storage";
 import { MongoClient } from "mongodb";
 
@@ -49,12 +50,12 @@ export async function mongoStore(collection: MongoAuthCollection): Promise<Recor
   };
 }
 
-export async function connect(uri: string, { collection = "rune_storage" }: { collection?: string } = {}) {
+export async function connect(uri: string, { collection = "rune_storage", name }: ConnectionOptions & { collection?: string } = {}) {
   const client = new MongoClient(uri, { serverSelectionTimeoutMS: 5000, maxPoolSize: 4 });
   try {
     await client.connect();
     const store = await mongoStore(client.db().collection<MongoAuthDocument>(collection));
-    return { client, store, close: () => client.close() };
+    return shareConnection({ client, store, close: () => client.close() }, "mongo", name);
   } catch (error) {
     await client.close();
     throw error;

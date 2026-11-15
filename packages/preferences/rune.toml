@@ -1,5 +1,5 @@
 name = "@rune/preferences"
-version = "0.1.0"
+version = "0.1.1"
 language = "typescript"
 entry = "index.ts"
 description = "Persistent per-player toggle settings with a service for other Runes."
@@ -10,3 +10,6 @@ include = ["*.ts", "rune.toml", "rune.jsonc", "package.json", "README.md"]
 
 [capabilities]
 required = ["host:bukkit"]
+
+[dependencies]
+"@rune/storage" = "^0.1.1"

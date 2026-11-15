@@ -1,7 +1,8 @@
 import { createCooldowns } from "@rune/cooldowns";
 import { normalizePositionName, snapshot, teleportTo, type Position } from "@rune/positions";
+import { paperRecords, StorageInputError } from "@rune/storage";
 
-const homes = rune.store("rune-homes");
+const homes = paperRecords<Record<string, Position>>(rune, "homes", "rune-homes");
 const delays = createCooldowns();
 const config = rune.config("homes", {
   "max-homes": { default: 5, min: 1, max: 100, label: "Homes per player" },
@@ -17,7 +18,7 @@ function playerAction(ctx: CommandCtx, input: string | undefined, action: (playe
     action(player, String(player.getUniqueId()), name);
 }
 
-const read = (id: string) => homes.get<Record<string, Position>>(id) ?? {};
+const read = (id: string) => homes.value()[id] ?? {};
 
 @Command("home", { description: "Visit your private home" })
 export class HomeVisit {
@@ -45,13 +46,15 @@ export class HomeVisit {
 export class HomeSet {
   @Arg("name", { type: "word", optional: true }) name?: string;
   @Run run(ctx: CommandCtx) { playerAction(ctx, this.name, (player, id, name) => {
-      const saved = read(id);
-      if (!Object.hasOwn(saved, name) && Object.keys(saved).length >= config.read()["max-homes"]) {
-        player.sendMessage("You reached your home limit.");
-        return;
-      }
-      homes.set(id, { ...saved, [name]: snapshot(player.getLocation()) });
-      player.sendMessage(`Saved home ${name}.`);
+      const point = snapshot(player.getLocation());
+      const limit = config.read()["max-homes"];
+      homes.edit((data) => {
+        const saved = data[id] ?? {};
+        if (!Object.hasOwn(saved, name) && Object.keys(saved).length >= limit) {
+          throw new StorageInputError("You reached your home limit.");
+        }
+        data[id] = { ...saved, [name]: point };
+      }, () => player.sendMessage(`Saved home ${name}.`), (message) => player.sendMessage(message));
   }); }
 }
 
@@ -59,12 +62,12 @@ export class HomeSet {
 export class HomeDelete {
   @Arg("name", { type: "word", optional: true }) name?: string;
   @Run run(ctx: CommandCtx) { playerAction(ctx, this.name, (player, id, name) => {
-      const saved = read(id);
-      if (!Object.hasOwn(saved, name)) { player.sendMessage("Home not found."); return; }
-      delete saved[name];
-      if (Object.keys(saved).length) homes.set(id, saved);
-      else homes.delete(id);
-      player.sendMessage(`Deleted home ${name}.`);
+      homes.edit((data) => {
+        const saved = data[id] ?? {};
+        if (!Object.hasOwn(saved, name)) throw new StorageInputError("Home not found.");
+        delete saved[name];
+        if (!Object.keys(saved).length) delete data[id];
+      }, () => player.sendMessage(`Deleted home ${name}.`), (message) => player.sendMessage(message));
   }); }
 }
 

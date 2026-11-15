@@ -1,7 +1,8 @@
 import { normalizePositionName, resolvePosition, snapshot, type Position } from "@rune/positions";
+import { paperRecords, StorageInputError } from "@rune/storage";
 
 interface Npc { id: string; title: string; line: string; at: Position }
-const registry = rune.store("rune-npcs");
+const registry = paperRecords<Npc>(rune, "npcs", "rune-npcs");
 const tagPrefix = "rune-npc:";
 const admin = { permission: "rune.admin" };
 const repeat = new Map<string, number>();
@@ -50,7 +51,16 @@ function removeEntity(npc: Npc) {
 }
 
 rune.schedule.nextTick(() => {
-  for (const npc of registry.values() as Npc[]) updateEntity(npc);
+  for (const npc of Object.values(registry.value())) updateEntity(npc);
+});
+
+registry.onChange((previous, next) => {
+  for (const [id, npc] of Object.entries(previous)) {
+    if (!Object.hasOwn(next, id) || JSON.stringify(next[id].at) !== JSON.stringify(npc.at)) removeEntity(npc);
+  }
+  for (const [id, npc] of Object.entries(next)) {
+    if (JSON.stringify(previous[id]) !== JSON.stringify(npc)) updateEntity(npc);
+  }
 });
 
 @Listener
@@ -61,7 +71,7 @@ export class NpcEvents {
     const world = loaded.getWorld().getName();
     const x = loaded.getX(), z = loaded.getZ();
     rune.schedule.nextTick(() => {
-      for (const npc of registry.values() as Npc[]) {
+      for (const npc of Object.values(registry.value())) {
         if (npc.at.world === world && chunk(npc.at.x) === x && chunk(npc.at.z) === z) updateEntity(npc);
       }
     });
@@ -71,7 +81,8 @@ export class NpcEvents {
   interact(event: PlayerInteractEntityEvent) {
     const id = taggedId(event.getRightClicked());
     if (!id) return;
-    const npc = registry.get<Npc>(id);
+    const data = registry.value();
+    const npc = Object.hasOwn(data, id) ? data[id] : undefined;
     if (!npc) return;
     event.setCancelled(true);
     if (String(event.getHand()) !== "HAND") return;
@@ -88,13 +99,11 @@ export class NpcEvents {
   quit(event: PlayerQuitEvent) { repeat.delete(String(event.getPlayer().getUniqueId())); }
 }
 
-const suggestions = () => registry.keys().sort();
-function find(ctx: CommandCtx, input: string) {
+const suggestions = () => Object.keys(registry.value()).sort();
+function find(data: Record<string, Npc>, input: string) {
   const id = normalizePositionName(input);
-  const npc = id && registry.get<Npc>(id);
-  if (npc) return npc;
-  ctx.sender.sendMessage("NPC not found.");
-  return null;
+  if (!id || !Object.hasOwn(data, id)) throw new StorageInputError("NPC not found.");
+  return data[id];
 }
 
 @Command("npc", { ...admin, description: "Manage interactive NPCs" })
@@ -109,13 +118,14 @@ export class CreateNpc {
   @Run run({ sender }: CommandCtx) {
     if (!sender.isPlayer) { sender.sendMessage("Stand where the NPC should spawn."); return; }
     const id = normalizePositionName(this.id);
-    if (!id || registry.has(id)) { sender.sendMessage("Choose a unique NPC ID (1–24 letters, digits, underscores or hyphens)."); return; }
+    if (!id) { sender.sendMessage("Choose a unique NPC ID (1–24 letters, digits, underscores or hyphens)."); return; }
     const title = this.title?.trim() || id;
     if (title.length > 64) { sender.sendMessage("Titles can be up to 64 characters."); return; }
     const npc = { id, title, line: "", at: snapshot((sender as unknown as Player).getLocation()) };
-    registry.set(id, npc);
-    updateEntity(npc);
-    sender.sendMessage(`Created NPC ${id}.`);
+    registry.edit((data) => {
+      if (Object.hasOwn(data, id)) throw new StorageInputError("That NPC ID is already in use.");
+      data[id] = npc;
+    }, () => sender.sendMessage(`Created NPC ${id}.`), (message) => sender.sendMessage(message));
   }
 }
 
@@ -124,12 +134,10 @@ export class SetNpcDialogue {
   @Arg("id", { type: "word", suggest: suggestions }) id!: string;
   @Arg("line", { type: "greedy", optional: true }) line?: string;
   @Run run(ctx: CommandCtx) {
-    const npc = find(ctx, this.id);
-    if (!npc) return;
     const line = this.line?.trim() ?? "";
     if (line.length > 300) { ctx.sender.sendMessage("Dialogue can be up to 300 characters."); return; }
-    registry.set(npc.id, { ...npc, line });
-    ctx.sender.sendMessage("Dialogue saved.");
+    registry.edit((data) => { find(data, this.id).line = line; },
+      () => ctx.sender.sendMessage("Dialogue saved."), (message) => ctx.sender.sendMessage(message));
   }
 }
 
@@ -137,10 +145,10 @@ export class SetNpcDialogue {
 export class RemoveNpc {
   @Arg("id", { type: "word", suggest: suggestions }) id!: string;
   @Run run(ctx: CommandCtx) {
-    const npc = find(ctx, this.id);
-    if (!npc) return;
-    registry.delete(npc.id);
-    removeEntity(npc);
-    ctx.sender.sendMessage(`Removed ${npc.id}.`);
+    registry.edit((data) => {
+      const npc = find(data, this.id);
+      delete data[npc.id];
+      return npc.id;
+    }, (id) => ctx.sender.sendMessage(`Removed ${id}.`), (message) => ctx.sender.sendMessage(message));
   }
 }
