@@ -43,7 +43,7 @@ function parents(id: string, back: Page): Page {
           const open = canRemove ? confirm("Remove direct parent?", [`${id} inherits ${parent}`], page, (player) =>
             save(player, `Removed ${parent} from ${id} inheritance.`, inherit(id, parent, false), page)) : undefined;
           return {
-            title: parent, icon: "CHAIN", lore: [direct.includes(parent) ? "Direct parent" : "Inherited through another group",
+            title: parent, icon: "LEAD", lore: [direct.includes(parent) ? "Direct parent" : "Inherited through another group",
               ...(canRemove ? ["Click to remove"] : [])], open,
           };
         });
@@ -72,7 +72,7 @@ function groupPage(id: string, back: Page): Page {
     const subject: Subject = { type: "group", id };
     const menu = new Menu(player, id, back);
     menu.item(4, { icon: "SHIELD", title: id, lore: [`Weight: ${group.weight ?? 0}`, ...wrap(group.parents.join(", "))] });
-    menu.button(11, "CHAIN", "Inheritance", ["View direct and inherited parents"], () => parents(id, page)(player));
+    menu.button(11, "LEAD", "Inheritance", ["View direct and inherited parents"], () => parents(id, page)(player));
     menu.button(13, "WRITABLE_BOOK", "Group rules", ["View allow and deny rules"], () => rules(subject, id, page)(player));
     menu.button(15, "PLAYER_HEAD", "Members", ["View player profiles with direct grants"], () => people(page, playerPage, id)(player));
     menu.button(20, "NAME_TAG", "Prefixes", [], () => labels(subject, id, "prefix", page)(player));
