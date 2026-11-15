@@ -1,5 +1,5 @@
 name = "@rune/moderation"
-version = "0.1.0"
+version = "0.1.1"
 language = "typescript"
 entry = "index.ts"
 description = "Paper moderation console and in-game GUI for cases, reports, temporary punishments and chat channels."
@@ -12,6 +12,6 @@ include = ["*.ts", "commands/*.ts", "gui/*.ts", "rune.toml", "README.md"]
 required = ["host:bukkit"]
 
 [dependencies]
-"@rune/storage" = "^0.1.2"
+"@rune/storage" = "^0.1.1"
 "@rune/paper-ui" = "^0.1.0"
-"@rune/cooldowns" = "^0.1.1"
+"@rune/cooldowns" = "^0.1.0"
