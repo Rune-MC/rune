@@ -59,7 +59,15 @@ export class ModerationEnforcement {
   }
 
   @EventHandler(Events.PlayerMoveEvent, { priority: "HIGHEST", ignoreCancelled: true })
-  move(event: PlayerMoveEvent) { if (freeze(event.getPlayer()) && event.hasChangedPosition()) event.setCancelled(true); }
+  move(event: PlayerMoveEvent) {
+    if (!freeze(event.getPlayer())) return;
+    const from = event.getFrom();
+    const to = event.getTo();
+    if (to && (from.getX() !== to.getX() || from.getY() !== to.getY() || from.getZ() !== to.getZ())) event.setCancelled(true);
+  }
+
+  @EventHandler(Events.PlayerTeleportEvent, { priority: "HIGHEST", ignoreCancelled: true })
+  teleport(event: PlayerTeleportEvent) { if (freeze(event.getPlayer())) event.setCancelled(true); }
 
   @EventHandler(Events.PlayerInteractEvent, { priority: "HIGHEST" })
   interact(event: PlayerInteractEvent) { if (freeze(event.getPlayer())) event.setCancelled(true); }

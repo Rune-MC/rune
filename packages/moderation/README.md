@@ -54,7 +54,7 @@ the address in case views.
 | `/mod ban <player> <duration> <reason>` | Block account login. |
 | `/mod ipban <address> <duration> <reason>` | Block an exact address. |
 | `/mod mute <player> <duration> <reason>` | Block chat and configured messaging commands. |
-| `/mod freeze <player> <duration> <reason>` | Block movement, basic interactions, breaking/placing blocks, and direct attacks. |
+| `/mod freeze <player> <duration> <reason>` | Block movement, teleports, basic interactions, breaking/placing blocks, and direct attacks. |
 | `/mod kick <player> <reason>` | Disconnect an online player and record the case. |
 | `/mod warn <player> <reason>` | Record a warning and notify the player when online. |
 | `/mod note <player> <reason>` | Record a staff-only note. |

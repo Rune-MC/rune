@@ -14,7 +14,8 @@ function registerNodes() {
     const name = "rune.moderation." + suffix;
     if (registered.has(name)) continue;
     if (!manager.getPermission(name)) {
-      manager.addPermission(new bukkit.permissions.Permission(name, "Rune Moderation " + suffix, suffix === "use" ? "OP" : "FALSE"));
+      const permission = bukkit.permissions.PermissionDefault[suffix === "use" ? "OP" : "FALSE"];
+      manager.addPermission(new bukkit.permissions.Permission(name, "Rune Moderation " + suffix, permission));
     }
     registered.add(name);
   }
