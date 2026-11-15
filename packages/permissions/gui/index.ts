@@ -2,7 +2,7 @@ import { backend } from "../backend.ts";
 import { admin } from "../commands/shared.ts";
 import { options, server } from "../settings.ts";
 import { groupList } from "./groups.ts";
-import { canEdit, Menu, submit, tell, type Page } from "./menu.ts";
+import { canEdit, Menu, tell, type Page } from "./menu.ts";
 import { people, playerPage } from "./people.ts";
 import { trackList } from "./tracks.ts";
 import { list, wrap } from "./widgets.ts";
@@ -70,14 +70,5 @@ export class OpenPermissionsMenu {
   @Run run({ sender }: CommandCtx) {
     if (!sender.isPlayer) { sender.sendMessage("Open the Permissions Manager in game."); return; }
     dashboard(sender as unknown as Player);
-  }
-}
-
-@Command("permissions input", { ...admin, description: "Enter text for the active Permissions prompt" })
-export class PermissionsMenuInput {
-  @Arg("text", { type: "greedy" }) text!: string;
-  @Run run({ sender }: CommandCtx) {
-    if (!sender.isPlayer) { sender.sendMessage("Enter Permissions input in game."); return; }
-    submit(sender as unknown as Player, this.text);
   }
 }

@@ -8,12 +8,19 @@ type Action = (click: Click) => void;
 export type Icon = keyof typeof bukkit.Material;
 type Entry = { icon: Icon; title: string; lore?: string[]; color?: string; action?: Action; preview?: Component };
 type View = { inventory: Inventory; actions: Map<number, Action> };
-type Prompt = { expires: number; accept: (value: string) => void; back: Page };
+type Prompt = {
+  expires: number;
+  timer: unknown;
+  submitted: boolean;
+  accept: (value: string) => void;
+  back: Page;
+};
 
 const views = new Map<string, View>();
 const prompts = new Map<string, Prompt>();
 const saving = new Set<string>();
 const marker = "rune-permissions-menu";
+const promptSeconds = 60;
 let trim: ItemStack | undefined;
 const owner = () => rune.bukkit.getPluginManager().getPlugin("Rune") as Plugin;
 export const uuid = (player: Player | OfflinePlayer) => String(player.getUniqueId()).toLowerCase();
@@ -62,7 +69,7 @@ export class Menu {
     const player = this.player;
     if (!player.isOnline() || !canView(player)) return;
     const id = uuid(player);
-    prompts.delete(id);
+    clearPrompt(id);
     views.set(id, { inventory: this.inventory, actions: this.actions });
     putMetadata(player, owner(), marker, this.inventory);
     player.openInventory(this.inventory);
@@ -70,36 +77,55 @@ export class Menu {
   }
 }
 
-export function forget(player: Player) {
+function forget(player: Player) {
   const id = uuid(player);
   views.delete(id);
-  prompts.delete(id);
+  clearPrompt(id);
   player.removeMetadata(marker, owner());
+}
+
+function clearPrompt(id: string) {
+  const request = prompts.get(id);
+  if (!request) return;
+  prompts.delete(id);
+  rune.schedule.cancel(request.timer);
+}
+
+function expirePrompt(player: Player, id: string) {
+  clearPrompt(id);
+  if (player.isOnline() && canView(player)) tell(player, "The Permissions prompt expired. Chat has resumed.", "yellow");
 }
 
 export function prompt(player: Player, title: string, hint: string, back: Page, accept: Prompt["accept"]) {
   if (!canView(player)) return;
   player.closeInventory();
-  prompts.set(uuid(player), { accept, back, expires: Date.now() + 60_000 });
+  const id = uuid(player);
+  clearPrompt(id);
+  const timeout = promptSeconds * 1_000;
+  const request: Prompt = {
+    accept, back, expires: Date.now() + timeout, submitted: false,
+    timer: rune.schedule.afterMs(() => {
+      if (prompts.get(id) === request && !request.submitted) expirePrompt(player, id);
+    }, timeout),
+  };
+  prompts.set(id, request);
   tell(player, title);
   tell(player, hint, "gray");
-  tell(player, "Type in chat within 60 seconds, or type !cancel. You can also use /permissions input <text>.", "gray");
+  tell(player, `Type your reply in chat within ${promptSeconds} seconds. It won't be broadcast. Type !cancel to go back.`, "gray");
 }
 
-export function pending(player: Player) {
-  const id = uuid(player);
+function pending(player: Player, id: string) {
   const request = prompts.get(id);
-  if (request && request.expires > Date.now() && canView(player)) return request;
-  prompts.delete(id);
-  return undefined;
+  if (!request) return;
+  if (!canView(player)) { clearPrompt(id); return; }
+  if (!request.submitted && Date.now() >= request.expires) { expirePrompt(player, id); return; }
+  return request;
 }
 
-export function submit(player: Player, text: string) {
-  const request = pending(player);
-  if (!request) { tell(player, "No active Permissions input.", "red"); return; }
-  prompts.delete(uuid(player));
-  if (text.trim().toLowerCase() === "!cancel") { request.back(player); return; }
-  try { request.accept(text.trim()); }
+function submit(player: Player, request: Prompt, text: string) {
+  const value = text.trim();
+  if (value.toLowerCase() === "!cancel") { request.back(player); return; }
+  try { request.accept(value); }
   catch (error) {
     tell(player, error instanceof Error ? error.message : "Invalid input.", "red");
     request.back(player);
@@ -115,7 +141,7 @@ export function save(player: Player, action: string, change: (data: PermissionSt
     saving.delete(id);
     if (!player.isOnline() || !canView(player)) return;
     tell(player, message, good ? "green" : "red");
-    if (views.get(id) === from && !pending(player)) page(player);
+    if (views.get(id) === from && !pending(player, id)) page(player);
   };
   commit(player, action, change, () => complete(action, true, done), (message) => complete(message, false, retry));
 }
@@ -164,14 +190,23 @@ export class PermissionMenus {
   @EventHandler(Events.AsyncChatEvent, { priority: "LOWEST" })
   chat(event: AsyncChatEvent) {
     const player = event.getPlayer();
-    const request = pending(player);
+    const id = uuid(player);
+    const request = pending(player, id);
     if (!request) return;
-    // Rune's event snapshots expose Adventure Components with their plain text.
-    const { originalMessage } = event as unknown as { originalMessage?: { text?: string } | string };
-    const message = typeof originalMessage === "string" ? originalMessage : originalMessage?.text;
-    if (typeof message !== "string") return;
     event.setCancelled(true);
-    rune.schedule.nextTick(() => { if (pending(player) === request) submit(player, message); });
+    if (request.submitted) return;
+    // Rune's event snapshots expose Adventure Components with their plain text.
+    type ChatText = { text?: string } | string;
+    const fields = event as unknown as { originalMessage?: ChatText; message?: ChatText };
+    const content = fields.originalMessage ?? fields.message;
+    const message = typeof content === "string" ? content : content?.text;
+    if (typeof message !== "string") { tell(player, "Could not read that reply. Try again or type !cancel.", "yellow"); return; }
+    request.submitted = true;
+    rune.schedule.nextTick(() => {
+      if (pending(player, id) !== request) return;
+      clearPrompt(id);
+      submit(player, request, message);
+    });
   }
 }
 

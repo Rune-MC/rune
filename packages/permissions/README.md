@@ -34,9 +34,10 @@ manager. Editing requires operator status as well.
 
 Lists support search and pagination. For rules, right-click the node field
 to browse registered permissions. Right-click context and duration fields
-for presets. Text fields accept chat input for 60 seconds and suppress the
-message while the prompt is active. Type `!cancel` to return to the editor,
-or use `/permissions input <text>` to submit through a command.
+for presets. When a text field opens a prompt, type your reply directly
+in chat within 60 seconds. Your reply goes to the form privately.
+Type `!cancel` to return to the editor. Chat resumes after you reply,
+cancel, or the prompt expires.
 
 ## Groups and player labels
 
@@ -111,7 +112,7 @@ editing rules.
 
 | Subcommand | Arguments and behavior |
 | --- | --- |
-| `gui`, `input` | Open the manager or submit text to an active prompt. |
+| `gui` | Open the in-game manager. |
 | `create`, `delete` | Pass a group name. Deleting a group cleans up its links, grants, and track entries. The `default` group is required. |
 | `weight` | Pass a group and an integer from -100000 to 100000. |
 | `inherit` | Pass a child group, parent group, and optional `true` or `false`. |
