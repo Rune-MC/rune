@@ -1,14 +1,39 @@
-# Homes
+# @rune/homes
 
-Choose storage with `RUNE_HOMES_STORAGE`. Use `local`, `reuse:<name>`,
-or `connect` with `RUNE_HOMES_DB_URL`. [Storage configuration](https://github.com/Rune-MC/rune/tree/main/packages/storage#share-an-open-database-on-paper)
+Give players private named teleport points that remember the world, position, and facing.
 
-`rune add @rune/homes`, then restart Paper.
+## Install
 
-- `/home set [name]` saves your location and facing.
-- `/home [name]` teleports to a saved home.
-- `/home list` and `/home delete [name]` manage your homes.
+```sh
+rune add @rune/homes
+```
 
-The unnamed slot is `home`. Homes are private to the owner's UUID and survive
-restart. Use `/rune config homes` to change the per-player limit and
-teleport cooldown. Failed teleports release the cooldown.
+Restart Paper, then stand at the spot you want to save and run `/home set`.
+Use `/home` to return. The unnamed slot is `home`.
+
+| In-game command | Behavior |
+| --- | --- |
+| `/home set [name]` | Save or replace a point at your current location. |
+| `/home [name]` | Visit one of your saved locations. |
+| `/home list` | List your saved names. |
+| `/home delete [name]` | Delete a saved point. |
+
+Names accept 1–24 letters, digits, underscores, or hyphens and normalize
+to lowercase. Homes are keyed by player UUID. These commands are available in game.
+
+## Settings and storage
+
+| Setting | Default | Range |
+| --- | --- | --- |
+| `max-homes` | `5` | 1–100 per player |
+| `cooldown-seconds` | `10` | 0–300 |
+
+Use `/rune config homes` to view settings. For example,
+`/rune config homes max-homes 10` permits ten homes per player. A failed
+teleport releases the cooldown. A destination's world must be loaded
+and a different Paper plugin can still cancel the teleport.
+
+Use the server environment to set `RUNE_HOMES_STORAGE` to `local`,
+`reuse:shared`, or `connect`. For `connect`, install the database adapter and set
+`RUNE_HOMES_DB_URL`. The default keeps existing local data and otherwise prefers
+an open connection when available. [Storage setup](https://github.com/Rune-MC/rune/tree/main/packages/storage#share-an-open-database-on-paper)

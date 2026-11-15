@@ -1,5 +1,5 @@
 name = "@rune/anticheat"
-version = "0.1.0"
+version = "0.1.1"
 language = "typescript"
 entry = "index.ts"
 description = "Alert-first movement and attack-frequency monitoring with configurable exemptions."

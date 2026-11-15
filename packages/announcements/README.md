@@ -1,15 +1,44 @@
-# Announcements
+# @rune/announcements
 
-Choose storage with `RUNE_ANNOUNCEMENTS_STORAGE`. Use `local`, `reuse:<name>`,
-or `connect` with `RUNE_ANNOUNCEMENTS_DB_URL`. [Storage configuration](https://github.com/Rune-MC/rune/tree/main/packages/storage#share-an-open-database-on-paper)
+Rotate formatted announcements on a Paper server and send important messages on demand.
 
-`rune add @rune/announcements`, then restart Paper.
+## Install
 
-- `/announcements set event <gold>Friday event at 7 PM</gold>` saves a message.
-- `/announcements send event` sends it now.
-- `/announcements` lists message IDs.
-- `/announcements delete event` removes it.
+```sh
+rune add @rune/announcements
+```
 
-The rotation skips empty servers and runs in ID order. Use
-`/rune config announcements` to set the interval or pause it. Install
-`@rune/preferences` to let players opt out. Management requires `rune.admin`.
+Restart Paper. Install [@rune/preferences](https://runemc.dev/runebook/r/@rune%2Fpreferences) if players should be able to opt out of announcements.
+
+## Commands
+
+All commands require `rune.admin`.
+
+| Command | Behavior |
+| --- | --- |
+| `/announcements` | List saved announcement IDs. |
+| `/announcements set <id> <message>` | Save or replace a MiniMessage string. |
+| `/announcements send <id>` | Send it immediately to eligible online players. |
+| `/announcements delete <id>` | Remove it from the rotation. |
+
+```text
+/announcements set event <gold>Friday event at 7 PM</gold>
+/announcements send event
+/rune config announcements interval-seconds 120
+```
+
+IDs are case-insensitive and accept 1–32 letters, digits, or hyphens.
+Messages can contain up to 400 characters. Automatic rotation follows ID
+order and waits while the server is empty. Sending manually restarts the
+interval without moving the rotation cursor.
+
+## Settings and storage
+
+`/rune config announcements` shows the current settings. `enabled` defaults
+to `true` and controls automatic rotation. `interval-seconds` defaults to
+`300` and accepts 15–3600 seconds.
+
+Use the server environment to set `RUNE_ANNOUNCEMENTS_STORAGE` to `local`,
+`reuse:shared`, or `connect`. For `connect`, install the database adapter and set
+`RUNE_ANNOUNCEMENTS_DB_URL`. The default keeps existing local data and otherwise prefers
+an open connection when available. [Storage setup](https://github.com/Rune-MC/rune/tree/main/packages/storage#share-an-open-database-on-paper)

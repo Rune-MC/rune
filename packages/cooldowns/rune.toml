@@ -1,5 +1,5 @@
 name = "@rune/cooldowns"
-version = "0.1.0"
+version = "0.1.1"
 language = "typescript"
 entry = "index.ts"
 description = "Bounded keyed cooldowns for commands, abilities, interactions, and games."

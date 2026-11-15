@@ -6,7 +6,7 @@ description = "Query WorldGuard regions from a Rune."
 library = true
 
 [publish]
-include = ["index.ts", "rune.toml", "rune.jsonc", "package.json"]
+include = ["index.ts", "rune.toml", "rune.jsonc", "package.json", "README.md"]
 
 [capabilities]
 required = ["host:plugin:worldguard","host:plugin:worldedit"]

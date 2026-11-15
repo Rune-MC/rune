@@ -1,5 +1,5 @@
 name = "@rune/warps"
-version = "0.1.1"
+version = "0.1.2"
 language = "typescript"
 entry = "index.ts"
 description = "Shared server warps with restricted access and operator management."

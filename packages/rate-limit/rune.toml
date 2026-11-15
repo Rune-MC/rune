@@ -1,5 +1,5 @@
 name = "@rune/rate-limit"
-version = "0.1.0"
+version = "0.1.1"
 language = "typescript"
 entry = "index.ts"
 description = "Bounded token-bucket rate limiting for web routes, commands, and events."

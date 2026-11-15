@@ -1,15 +1,51 @@
-# Anticheat
+# @rune/anticheat
 
-`rune add @rune/anticheat`, then restart Paper.
+Monitor sustained horizontal speed and direct melee hit rate on Paper.
+Alerts go to the console and staff with `rune.anticheat.alerts`. This Rune
+is alert-only. Staff decide what action to take after reviewing the alert.
 
-Configurable monitoring for sustained horizontal speed and direct melee
-hit rate. Alerts go to the console and players with
-`rune.anticheat.alerts`. `/anticheat [player]` reports session alerts.
-The `anticheat.alert` event includes the check, player UUID, measured
-rate, threshold, and timestamp.
+## Install and inspect alerts
 
-Use `/rune config anticheat` to tune limits for your server. Flight,
-vehicles, swimming, speed effects, teleport grace, low TPS, and high ping
-are considered. Grant `rune.anticheat.bypass` for known custom movement.
-Treat every alert as a signal to investigate. This Rune applies no kicks,
-bans, damage changes, or movement corrections.
+```sh
+rune add @rune/anticheat
+```
+
+Restart Paper. Use `/anticheat` for monitoring status and estimated TPS or
+`/anticheat <online-player>` to inspect that player. The command requires
+`rune.anticheat.alerts`. Use `rune.anticheat.bypass` for users with known
+custom movement. Alert counters live in memory and reset when a player
+disconnects or the Rune reloads.
+
+## Tune the checks
+
+| Setting | Default | Unit |
+| --- | --- | --- |
+| `enabled` | `true` | Enable monitoring |
+| `speed-limit` | `13` | Horizontal blocks per second |
+| `hit-limit` | `12` | Direct melee hits per second |
+| `max-ping` | `200` | Milliseconds |
+| `min-tps` | `17` | Server ticks per second |
+
+Use `/rune config anticheat` to inspect or edit values. For example, use
+`/rune config anticheat speed-limit 16`. Flight, vehicles, swimming,
+movement effects, recent teleports or velocity, high latency, and low TPS
+affect eligibility or thresholds.
+
+## Consume alerts
+
+Subscribe to the custom Rune event `anticheat.alert` for moderation logs or staff notifications.
+
+```typescript
+type Alert = {
+  playerId: string;
+  name: string;
+  check: string;
+  rate: number;
+  limit: number;
+  timestamp: number;
+};
+
+rune.events.on<Alert>("anticheat.alert", (alert) => {
+  console.info(alert.name, alert.check, alert.rate, alert.limit);
+});
+```

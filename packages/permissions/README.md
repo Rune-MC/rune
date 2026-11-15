@@ -1,9 +1,17 @@
-# Permissions
+# @rune/permissions
 
-Install with `rune add @rune/permissions` and restart Paper. For an
-existing installation, run `rune update @rune/storage` before
-`rune update @rune/permissions`. Upgrade any installed database adapter as
-well. Existing groups, direct memberships, and storage settings still work.
+Manage Paper permissions, ranks, and player labels from an in-game GUI or commands.
+
+## Install and upgrade
+
+```sh
+rune add @rune/permissions
+```
+
+Restart Paper, then use `/permissions gui` in game. For an existing installation,
+run `rune update @rune/storage` before `rune update @rune/permissions`.
+Upgrade any installed database adapter as well. Existing groups, direct
+memberships, and storage settings still work.
 
 ## In-game Permissions Manager
 
@@ -94,6 +102,30 @@ The `permissions` service (major version 1) exposes `groups(uuid, context)`,
 `rules(uuid, context)`, `check(uuid, node, context)`,
 `explain(uuid, node, context)`, and `meta(uuid, context)`. The last method
 returns the primary group and ordered MiniMessage prefix and suffix arrays.
+
+## Command reference
+
+The base command is `/permissions`. Commands require `rune.admin`,
+and permission changes also require operator status. The GUI has the same
+editing rules.
+
+| Subcommand | Arguments and behavior |
+| --- | --- |
+| `gui`, `input` | Open the manager or submit text to an active prompt. |
+| `create`, `delete` | Pass a group name. Deleting a group cleans up its links, grants, and track entries. The `default` group is required. |
+| `weight` | Pass a group and an integer from -100000 to 100000. |
+| `inherit` | Pass a child group, parent group, and optional `true` or `false`. |
+| `rule` | Pass a group, node, `allow\|deny\|unset`, optional context, and optional duration. |
+| `user-rule` | Pass a player, node, decision, optional context, and optional duration. |
+| `member` | Pass an online player, group, and optional `true` or `false` for permanent global membership. |
+| `grant`, `revoke` | Pass a player, group, and optional context. `grant` also accepts a duration. |
+| `primary` | Pass a player and optional group. Omit the group for automatic selection. |
+| `prefix`, `suffix` | Pass a group, priority, and MiniMessage text to set a global label. |
+| `label` | Pass a subject, `prefix` or `suffix`, priority, context, and text. |
+| `tracks`, `track-set`, `track-delete` | List tracks, save a named track with its groups in order, or remove a track by name. |
+| `promote`, `demote` | Pass a player and track. |
+| `inspect`, `explain` | Inspect an online player's profile, or pass a player, concrete permission node, and optional context to explain a decision. |
+| `audit` | Show recent edits. Pass an optional limit from 1 to 50. |
 
 ## Storage
 

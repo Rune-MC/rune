@@ -6,7 +6,7 @@ description = "Party queues and action-bar display for Paper mini-games."
 library = true
 
 [publish]
-include = ["index.ts", "rune.toml", "rune.jsonc", "package.json"]
+include = ["index.ts", "rune.toml", "rune.jsonc", "package.json", "README.md"]
 
 [capabilities]
 required = ["host:bukkit"]

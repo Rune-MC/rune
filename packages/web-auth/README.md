@@ -1,11 +1,19 @@
-# Web Auth
-
-`rune add @rune/web-auth`
+# @rune/web-auth
 
 TypeScript authentication for web apps. Use opaque database-backed sessions
 or signed, revocable JWTs. Both modes support sign-out, sign-out everywhere,
 password changes, and one-time password recovery. A custom `AuthStore` can
 add any backend that supports atomic insert and compare-and-swap operations.
+
+## Install
+
+```sh
+rune add @rune/web-auth
+rune add @rune/sqlite
+```
+
+The second command installs the adapter used below. Run the library on
+the server side of a TypeScript Rune with a Fetch-compatible HTTP handler.
 
 ## SQLite and sessions
 
@@ -75,3 +83,17 @@ The library hashes passwords with scrypt and limits concurrent password work.
 Use an ingress rate limit as well. For multiple instances pass a shared
 `allowAttempt` limiter. Registration, identity verification, authorization
 rules, and recovery delivery are controlled by your application.
+
+## Application integration
+
+- Provision users with `auth.register(login, password)` or enable the
+  registration route with `allowRegistration: true` after wiring your
+  application's registration policy. Logins are normalized to lowercase.
+  New passwords require at least 15 characters and may use up to 1024 bytes.
+- In protected routes, use the authenticated account's stable `id` for
+  authorization. `authenticate` returns `null` for an invalid or absent
+  credential. Store roles and application profile data separately.
+- Deploy browser routes over HTTPS and set `origin` to the public site origin.
+  Change `basePath` if you mount the handler under a path other than `/auth`.
+- `createAuth` also accepts `ttlSeconds`, `namespace`, `maxPasswordJobs`,
+  and `allowAttempt`. Handle credentials and recovery codes on the server.

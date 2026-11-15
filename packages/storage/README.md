@@ -1,10 +1,16 @@
-# Storage
+# @rune/storage
 
-`rune add @rune/storage`
-
-One interface for reusable persistence. Use a backend such as
+Persist JSON in typed documents and share database connections between Runes.
+Use a backend such as
 `@rune/sqlite`, `@rune/mongo`, `@rune/mysql`, `@rune/postgres`,
 or `@rune/redis` in production. `memoryStore()` is useful for tests.
+
+## Install and write a document
+
+```sh
+rune add @rune/storage
+rune add @rune/sqlite
+```
 
 ```typescript
 import { document } from "@rune/storage";
@@ -22,6 +28,22 @@ a backend with atomic insert, revision-checked replace and removal, and
 expiration cleanup. `record(value, expiresAt)` creates a fresh revision.
 The low-level `get` may return an expired record pending deletion. Check the
 timestamp before using expiring credentials.
+
+## API
+
+| API | Use |
+| --- | --- |
+| `document(store, key, defaultValue)` | Read or atomically update one JSON value. Keys may use letters, digits, colons, underscores, dots, and hyphens. |
+| `memoryStore()` | A process-local implementation without a database dependency. |
+| `record(value, expiresAt?)` | Encode a JSON value with a new revision and optional Unix expiration time in milliseconds. |
+| `connectUrl(url, options?)` | Open the installed adapter for `file:`, `mysql:`, `postgresql:`, `mongodb:`, `mongodb+srv:`, `redis:`, or `rediss:`. `postgres:` also works. |
+| `connections` | Look up or register a named connection within the current Rune runtime. |
+| `paperStore(rune, options)`, `paperRecords(rune, id, localName)` | Wrap plugin state with local or database storage, a cached synchronous snapshot, and writes that report success or failure on the Paper thread. |
+
+`RecordStore` exposes `get`, `insert`, `replace`, `remove`, and `prune`.
+Writes return `true` on success. A duplicate insert or a missing or
+stale revision returns `false`. `prune` removes expired records and
+returns the number removed when the backend performs the cleanup itself.
 
 ## Share an open database on Paper
 
