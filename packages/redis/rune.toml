@@ -1,0 +1,13 @@
+name = "@rune/redis"
+version = "0.1.0"
+language = "typescript"
+entry = "index.ts"
+description = "Redis adapter for Rune storage with atomic Lua writes and native TTL."
+license = "Apache-2.0"
+library = true
+
+[publish]
+include = ["*.ts", "rune.toml", "rune.jsonc", "package.json", "README.md"]
+
+[dependencies]
+"@rune/storage" = "^0.1.0"

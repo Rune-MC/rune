@@ -1,0 +1,6 @@
+{
+  "name": "@rune/pagination",
+  "private": true,
+  "type": "module",
+  "exports": "./index.ts"
+}

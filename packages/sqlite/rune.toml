@@ -1,0 +1,13 @@
+name = "@rune/sqlite"
+version = "0.1.0"
+language = "typescript"
+entry = "index.ts"
+description = "File-backed SQLite adapter for Rune storage with no native npm dependency."
+license = "Apache-2.0"
+library = true
+
+[publish]
+include = ["*.ts", "rune.toml", "rune.jsonc", "package.json", "README.md"]
+
+[dependencies]
+"@rune/storage" = "^0.1.0"

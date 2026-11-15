@@ -1,0 +1,13 @@
+name = "@rune/web-auth"
+version = "0.1.0"
+language = "typescript"
+entry = "index.ts"
+description = "Web authentication with revocable JWTs, database-backed sessions, and pluggable storage."
+license = "Apache-2.0"
+library = true
+
+[publish]
+include = ["*.ts", "rune.toml", "rune.jsonc", "package.json", "README.md"]
+
+[dependencies]
+"@rune/storage" = "^0.1.0"

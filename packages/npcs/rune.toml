@@ -1,0 +1,15 @@
+name = "@rune/npcs"
+version = "0.1.0"
+language = "typescript"
+entry = "index.ts"
+description = "Persistent mob NPCs with dialogue, safe interaction events, and operator commands."
+license = "Apache-2.0"
+
+[publish]
+include = ["*.ts", "rune.toml", "rune.jsonc", "package.json", "README.md"]
+
+[capabilities]
+required = ["host:bukkit"]
+
+[dependencies]
+"@rune/positions" = "^0.1.0"

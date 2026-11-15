@@ -94,6 +94,7 @@ The prebuilts repo's CI builds libnode from source for every supported platform 
 
 ## Docs
 
+* [Rune utility packages](packages/README.md) — TypeScript libraries and Paper add-ons in the [@rune Runebook catalog](https://runemc.dev/runebook/o/rune).
 * `DESIGN_SPEC.md` -- architecture + invariants.
 * `install/README.md` -- end-user install + script scaffolding.
 * In-game: `/rune help`.

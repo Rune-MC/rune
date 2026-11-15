@@ -1,0 +1,10 @@
+name = "@rune/cooldowns"
+version = "0.1.0"
+language = "typescript"
+entry = "index.ts"
+description = "Bounded keyed cooldowns for commands, abilities, interactions, and games."
+license = "Apache-2.0"
+library = true
+
+[publish]
+include = ["*.ts", "rune.toml", "rune.jsonc", "package.json", "README.md"]

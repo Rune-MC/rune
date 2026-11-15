@@ -1,0 +1,9 @@
+{
+  "name": "@rune/mysql",
+  "private": true,
+  "type": "module",
+  "exports": "./index.ts",
+  "dependencies": {
+    "mysql2": "3.24.6"
+  }
+}

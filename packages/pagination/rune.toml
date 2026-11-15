@@ -1,0 +1,10 @@
+name = "@rune/pagination"
+version = "0.1.0"
+language = "typescript"
+entry = "index.ts"
+description = "Deterministic pagination and numbered list formatting for menus and commands."
+license = "Apache-2.0"
+library = true
+
+[publish]
+include = ["*.ts", "rune.toml", "rune.jsonc", "package.json", "README.md"]

@@ -1,0 +1,6 @@
+{
+  "name": "@rune/sqlite",
+  "private": true,
+  "type": "module",
+  "exports": "./index.ts"
+}

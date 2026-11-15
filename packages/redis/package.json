@@ -1,0 +1,9 @@
+{
+  "name": "@rune/redis",
+  "private": true,
+  "type": "module",
+  "exports": "./index.ts",
+  "dependencies": {
+    "redis": "6.3.1"
+  }
+}

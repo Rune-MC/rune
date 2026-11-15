@@ -1,0 +1,12 @@
+{
+  "name": "@rune/postgres",
+  "private": true,
+  "type": "module",
+  "exports": "./index.ts",
+  "dependencies": {
+    "pg": "8.23.1"
+  },
+  "devDependencies": {
+    "@types/pg": "^8.15.0"
+  }
+}
