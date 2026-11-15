@@ -283,8 +283,8 @@ interface RuneApi {
     ): Entity;
 
     /**
-     * Chest GUI with per-slot click handlers. All clicks inside the
-     * GUI are auto-cancelled (so display items can't be picked up).
+     * Chest GUI with per-slot click handlers and private chat prompts.
+     * Clicks, drags and creative item changes are canceled while it is open.
      *
      *   const gui = rune.gui({ title: "<gold>Shop", rows: 3 }, (g) => {
      *     g.border(rune.item(bukkit.Material.BLACK_STAINED_GLASS_PANE).name(" ").build());
@@ -299,7 +299,7 @@ interface RuneApi {
      *   });
      *   gui.open(player);
      */
-    gui(spec: GuiSpec, init?: (gui: Gui) => void): Gui;
+    readonly gui: GuiFactory;
 
     // ---------------- Static Java surface ----------------
     /** org.bukkit.Bukkit static methods. */
@@ -723,6 +723,25 @@ declare global {
         rows?: number;
     }
 
+    interface GuiPromptSpec {
+        title?: RuneMessage;
+        hint?: RuneMessage;
+        /** Defaults to 60 seconds. */
+        timeoutMs?: number;
+        canReply?(player: Player): boolean;
+        onReply(text: string, player: Player): void;
+        onCancel?(player: Player): void;
+        onTimeout?(player: Player): void;
+    }
+
+    interface GuiFactory {
+        (spec: GuiSpec, init?: (gui: Gui) => void): Gui;
+        /** Close the current inventory and consume the next chat reply privately. */
+        prompt(player: Player, spec: GuiPromptSpec): void;
+        cancelPrompt(player: Player): void;
+        hasPrompt(player: Player): boolean;
+    }
+
     /**
      * The Gui object is also a live `Inventory` ref -- unknown property
      * reads delegate to the underlying Bukkit Inventory. That makes both
@@ -758,6 +777,8 @@ declare global {
         onClose(fn: (e: InventoryCloseEvent) => void): Gui;
         /** Open for one player. Re-callable to refresh state. */
         open(player: Player): Gui;
+        /** Close the inventory and consume the next chat reply privately. */
+        prompt(player: Player, spec: GuiPromptSpec): Gui;
         /** Live `org.bukkit.inventory.Inventory` ref -- escape hatch. */
         readonly inventory: any;
         /** Inventory ref id (delegated from `inventory.__ref`). */

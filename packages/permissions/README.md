@@ -9,7 +9,8 @@ rune add @rune/permissions
 ```
 
 Restart Paper, then use `/permissions gui` in game. For an existing installation,
-run `rune update @rune/storage` before `rune update @rune/permissions`.
+run `rune add @rune/paper-ui` and `rune update @rune/storage` before
+`rune update @rune/permissions`.
 Upgrade any installed database adapter as well. Existing groups, direct
 memberships, and storage settings still work.
 

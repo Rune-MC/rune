@@ -1,0 +1,6 @@
+{
+  "name": "@rune/paper-ui",
+  "private": true,
+  "type": "module",
+  "exports": "./index.ts"
+}

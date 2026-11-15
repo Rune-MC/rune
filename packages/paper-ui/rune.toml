@@ -1,0 +1,13 @@
+name = "@rune/paper-ui"
+version = "0.1.0"
+language = "typescript"
+entry = "index.ts"
+description = "Searchable inventories, draft editors, confirmations and private chat prompts for Paper Runes."
+license = "Apache-2.0"
+library = true
+
+[publish]
+include = ["*.ts", "rune.toml", "rune.jsonc", "package.json", "README.md"]
+
+[capabilities]
+required = ["host:bukkit"]

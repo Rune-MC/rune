@@ -827,8 +827,33 @@ globalThis.rune.spawn = function (location, typeName, configure) {
 // InventoryClickEvent / InventoryCloseEvent listeners exactly once.
 // ---------------------------------------------------------------------------
 
-const _activeGuis = new Map(); // inventory __ref -> {slots, size, onClose}
+const _activeGuis = new Map(); // inventory __ref -> {slots, size, onClose, viewers}
+const _guiPrompts = new Map(); // player UUID -> current chat prompt
 let _guiEventsWired = false;
+let _guiHandlingClick = false;
+
+function _guiPlayerId(player) { return String(player.getUniqueId()); }
+function _guiClearPrompt(id) {
+  const prompt = _guiPrompts.get(id);
+  if (!prompt) return;
+  _guiPrompts.delete(id);
+  clearTimeout(prompt.timer);
+}
+
+function _guiPending(player, id) {
+  const prompt = _guiPrompts.get(id);
+  if (!prompt) return;
+  if (prompt.spec.canReply && !prompt.spec.canReply(player)) {
+    _guiClearPrompt(id);
+    return;
+  }
+  if (!prompt.submitted && Date.now() >= prompt.deadline) {
+    _guiClearPrompt(id);
+    prompt.spec.onTimeout?.(player);
+    return;
+  }
+  return prompt;
+}
 
 function _ensureGuiEvents() {
   if (_guiEventsWired) return;
@@ -853,22 +878,59 @@ function _ensureGuiEvents() {
     if (slot < 0 || slot >= cfg.size) return; // click was in the player's own inventory
     const entry = cfg.slots.get(slot);
     if (entry && typeof entry.onClick === 'function') {
-      try { entry.onClick(e); }
+      try {
+        _guiHandlingClick = true;
+        entry.onClick(e);
+      }
       catch (err) { __rune_log_error('GUI click handler threw: ' + (err && err.stack || err)); }
+      finally { _guiHandlingClick = false; }
     }
   });
+  for (const event of ['InventoryDragEvent', 'InventoryCreativeEvent']) {
+    rune.on(event, (e) => {
+      if (_activeGuis.has(e.getInventory()?.__ref)) e.setCancelled(true);
+    }, { priority: 'HIGHEST' });
+  }
   rune.on('InventoryCloseEvent', (e) => {
     const inv = e.getInventory();
     const refId = inv?.__ref;
     if (refId == null) return;
     const cfg = _activeGuis.get(refId);
     if (!cfg) return;
+    cfg.viewers.delete(_guiPlayerId(e.getPlayer()));
+    if (cfg.viewers.size === 0) _activeGuis.delete(refId);
     if (typeof cfg.onClose === 'function') {
       try { cfg.onClose(e); }
       catch (err) { __rune_log_error('GUI close handler threw: ' + (err && err.stack || err)); }
     }
-    _activeGuis.delete(refId);
   });
+}
+
+let _guiPromptEventsWired = false;
+function _guiPromptEvents() {
+  if (_guiPromptEventsWired) return;
+  _guiPromptEventsWired = true;
+  rune.on('AsyncChatEvent', (e) => {
+    if (!_guiPrompts.size) return;
+    const player = e.getPlayer();
+    const id = _guiPlayerId(player);
+    const prompt = _guiPending(player, id);
+    if (!prompt) return;
+    e.setCancelled(true);
+    if (prompt.submitted) return;
+    const component = e.originalMessage ?? e.message;
+    const text = typeof component === 'string' ? component : component?.text;
+    if (typeof text !== 'string') return;
+    prompt.submitted = true;
+    rune.schedule.nextTick(() => {
+      if (_guiPending(player, id) !== prompt) return;
+      _guiClearPrompt(id);
+      const value = text.trim();
+      if (value.toLowerCase() === '!cancel') prompt.spec.onCancel?.(player);
+      else prompt.spec.onReply(value, player);
+    });
+  }, { priority: 'LOWEST' });
+  rune.on('PlayerQuitEvent', (e) => _guiClearPrompt(_guiPlayerId(e.getPlayer())));
 }
 
 globalThis.rune.gui = function (spec, init) {
@@ -914,10 +976,18 @@ globalThis.rune.gui = function (spec, init) {
     },
     onClose(fn) { onCloseHandler = fn; return gui; },
     open(player) {
-      _activeGuis.set(inv.__ref, { slots, size, onClose: onCloseHandler });
-      player.openInventory(inv);
+      const id = _guiPlayerId(player);
+      _guiClearPrompt(id);
+      const opened = player.openInventory(inv);
+      if (opened) {
+        const cfg = _activeGuis.get(inv.__ref) ?? { slots, size, onClose: onCloseHandler, viewers: new Set() };
+        cfg.onClose = onCloseHandler;
+        cfg.viewers.add(id);
+        _activeGuis.set(inv.__ref, cfg);
+      }
       return gui;
     },
+    prompt(player, spec) { rune.gui.prompt(player, spec); return gui; },
     /** Live Inventory ref -- escape hatch for direct Bukkit calls. */
     inventory: inv,
   };
@@ -954,6 +1024,32 @@ globalThis.rune.gui = function (spec, init) {
   if (typeof init === 'function') init(gui);
   return gui;
 };
+
+globalThis.rune.gui.prompt = function (player, spec) {
+  if (!spec || typeof spec.onReply !== 'function') throw new TypeError('A GUI prompt needs an onReply handler');
+  const timeout = spec.timeoutMs ?? 60_000;
+  if (!Number.isSafeInteger(timeout) || timeout < 1 || timeout > 2_147_483_647) throw new RangeError('Invalid GUI prompt timeout');
+  if (!player.isOnline() || (spec.canReply && !spec.canReply(player))) return;
+  if (_guiHandlingClick) {
+    rune.schedule.nextTick(() => rune.gui.prompt(player, spec));
+    return;
+  }
+  _guiPromptEvents();
+  const id = _guiPlayerId(player);
+  _guiClearPrompt(id);
+  player.closeInventory();
+  const prompt = { spec, submitted: false, deadline: Date.now() + timeout };
+  prompt.timer = setTimeout(() => {
+    if (_guiPrompts.get(id) !== prompt || prompt.submitted) return;
+    _guiClearPrompt(id);
+    if (player.isOnline() && (!spec.canReply || spec.canReply(player))) spec.onTimeout?.(player);
+  }, timeout);
+  _guiPrompts.set(id, prompt);
+  if (spec.title) rune.adventure.send(player, spec.title);
+  if (spec.hint) rune.adventure.send(player, spec.hint);
+};
+globalThis.rune.gui.cancelPrompt = (player) => _guiClearPrompt(_guiPlayerId(player));
+globalThis.rune.gui.hasPrompt = (player) => Boolean(_guiPending(player, _guiPlayerId(player)));
 
 // ---------------------------------------------------------------------------
 // rune.runOnMain(fn) -- promote a JS function call onto a Bukkit-managed

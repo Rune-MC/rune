@@ -1,0 +1,17 @@
+name = "@rune/moderation"
+version = "0.1.0"
+language = "typescript"
+entry = "index.ts"
+description = "Paper moderation console and in-game GUI for cases, reports, temporary punishments and chat channels."
+license = "Apache-2.0"
+
+[publish]
+include = ["*.ts", "commands/*.ts", "gui/*.ts", "rune.toml", "README.md"]
+
+[capabilities]
+required = ["host:bukkit"]
+
+[dependencies]
+"@rune/storage" = "^0.1.2"
+"@rune/paper-ui" = "^0.1.0"
+"@rune/cooldowns" = "^0.1.1"

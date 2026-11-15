@@ -1,5 +1,5 @@
 name = "@rune/permissions"
-version = "0.3.3"
+version = "0.3.4"
 language = "typescript"
 entry = "index.ts"
 description = "In-game Permissions Manager with scoped rules, temporary ranks, promotion tracks, and Adventure player labels."
@@ -13,3 +13,4 @@ required = ["host:bukkit"]
 
 [dependencies]
 "@rune/storage" = "^0.1.1"
+"@rune/paper-ui" = "^0.1.0"
