@@ -16,6 +16,8 @@
 //! `/etc/passwd`-style permissions.
 
 use std::collections::BTreeMap;
+use std::fs::{File, OpenOptions};
+use std::io::Write;
 use std::path::PathBuf;
 
 use anyhow::{Context, Result, anyhow};
@@ -37,6 +39,9 @@ pub struct TokenEntry {
 }
 
 pub fn token_path() -> Result<PathBuf> {
+    if let Some(dir) = std::env::var_os("RUNE_CONFIG_DIR").filter(|dir| !dir.is_empty()) {
+        return Ok(PathBuf::from(dir).join("token"));
+    }
     // `dirs::config_dir()` returns:
     //   * Linux:   ~/.config            -> ~/.config/rune/token
     //   * macOS:   ~/Library/Application Support -> .../rune/token
@@ -59,20 +64,21 @@ pub fn load() -> Result<TokenStore> {
     Ok(store)
 }
 
-pub fn save(store: &TokenStore) -> Result<()> {
+fn save(store: &TokenStore) -> Result<()> {
     let path = token_path()?;
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent)
-            .with_context(|| format!("creating {}", parent.display()))?;
-    }
-    let raw = serde_json::to_string_pretty(store)?;
-    write_private(&path, &raw)?;
+    let parent = path.parent().context("token path has no parent")?;
+    let mut file = tempfile::NamedTempFile::new_in(parent)?;
+    serde_json::to_writer_pretty(&mut file, store)?;
+    file.flush()?;
+    file.persist(&path)
+        .with_context(|| format!("saving {}", path.display()))?;
     Ok(())
 }
 
 /// Set the entry for `registry`, replacing any existing one. Persists
 /// the whole store back to disk in one atomic-ish write.
 pub fn put(registry: &url::Url, entry: TokenEntry) -> Result<()> {
+    let _lock = lock_config()?;
     let mut store = load()?;
     store.entries.insert(canonical_registry(registry), entry);
     save(&store)
@@ -83,13 +89,23 @@ pub fn get(registry: &url::Url) -> Result<Option<TokenEntry>> {
     Ok(store.entries.get(&canonical_registry(registry)).cloned())
 }
 
-pub fn remove(registry: &url::Url) -> Result<bool> {
-    let mut store = load()?;
-    let removed = store.entries.remove(&canonical_registry(registry)).is_some();
-    if removed {
-        save(&store)?;
+pub fn clear() -> Result<bool> {
+    let _lock = lock_config()?;
+    match std::fs::remove_file(token_path()?) {
+        Ok(()) => Ok(true),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(false),
+        Err(error) => Err(error.into()),
     }
-    Ok(removed)
+}
+
+fn lock_config() -> Result<File> {
+    let path = token_path()?;
+    let parent = path.parent().context("token path has no parent")?;
+    std::fs::create_dir_all(parent)?;
+    let lock = OpenOptions::new().write(true).create(true).truncate(false)
+        .open(parent.join(".token.lock"))?;
+    lock.try_lock().context("another Rune command is updating saved credentials")?;
+    Ok(lock)
 }
 
 /// Strip trailing slash + lowercase scheme + host. So `HTTPS://Runemc.dev/`
@@ -104,28 +120,4 @@ fn canonical_registry(u: &url::Url) -> String {
         s = format!("http://{}", rest.to_lowercase());
     }
     s
-}
-
-#[cfg(unix)]
-fn write_private(path: &std::path::Path, contents: &str) -> Result<()> {
-    use std::os::unix::fs::OpenOptionsExt;
-    use std::io::Write;
-    let mut f = std::fs::OpenOptions::new()
-        .write(true)
-        .create(true)
-        .truncate(true)
-        .mode(0o600)
-        .open(path)
-        .with_context(|| format!("opening {}", path.display()))?;
-    f.write_all(contents.as_bytes())?;
-    Ok(())
-}
-
-#[cfg(not(unix))]
-fn write_private(path: &std::path::Path, contents: &str) -> Result<()> {
-    // Windows: rely on the per-user ACL on %APPDATA%. There's no portable
-    // analogue to chmod 0o600 short of dropping into win32 APIs.
-    std::fs::write(path, contents)
-        .with_context(|| format!("writing {}", path.display()))?;
-    Ok(())
 }

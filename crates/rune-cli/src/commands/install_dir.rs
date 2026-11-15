@@ -5,9 +5,12 @@
 //! per-install metadata file we drop in alongside the installed source.
 
 use std::path::{Path, PathBuf};
+use std::fs::{File, OpenOptions};
 
 use anyhow::{Context, Result, anyhow};
 use serde::{Deserialize, Serialize};
+
+use crate::cli::ScriptsArgs;
 
 /// Filename used as the install marker / lockfile inside every Rune we
 /// own on disk. Its presence tells `rune remove` "yes, this directory
@@ -34,11 +37,8 @@ pub struct InstallLock {
 ///   1. Explicit `--scripts <path>` / `RUNE_SCRIPTS` env. If the user
 ///      pointed us straight at a `scripts` dir, use it; if they pointed
 ///      at a server root, descend into `plugins/Rune/scripts`.
-///   2. Current dir contains `plugins/Rune/scripts/` → use that.
-///   3. Current dir already IS a `plugins/Rune/scripts/` (basename
-///      checks). The runtime puts every installed script inside one of
-///      these, so it's a common cwd.
-///   4. Otherwise error with a friendly hint.
+///   2. Look for `plugins/Rune/scripts/` from the current directory and
+///      its parents, including when running inside an installed Rune.
 pub fn resolve(explicit: Option<&Path>) -> Result<PathBuf> {
     if let Some(p) = explicit {
         return canonicalize_scripts(p);
@@ -46,12 +46,14 @@ pub fn resolve(explicit: Option<&Path>) -> Result<PathBuf> {
 
     let cwd = std::env::current_dir().context("reading current working directory")?;
 
-    let candidate = cwd.join("plugins").join("Rune").join("scripts");
-    if candidate.is_dir() {
-        return Ok(candidate);
-    }
-    if looks_like_scripts_dir(&cwd) {
-        return Ok(cwd);
+    for dir in cwd.ancestors() {
+        let candidate = dir.join("plugins/Rune/scripts");
+        if candidate.is_dir() {
+            return Ok(candidate);
+        }
+        if looks_like_scripts_dir(dir) {
+            return Ok(dir.to_path_buf());
+        }
     }
 
     Err(anyhow!(
@@ -61,16 +63,14 @@ pub fn resolve(explicit: Option<&Path>) -> Result<PathBuf> {
 }
 
 fn canonicalize_scripts(p: &Path) -> Result<PathBuf> {
-    if !p.exists() {
-        return Err(anyhow!(
-            "scripts path does not exist: {}",
-            p.display()
-        ));
+    let dir = std::path::absolute(p)?;
+    if !dir.is_dir() {
+        return Err(anyhow!("scripts path is not a directory: {}", p.display()));
     }
-    if looks_like_scripts_dir(p) {
-        return Ok(p.to_path_buf());
+    if looks_like_scripts_dir(&dir) {
+        return Ok(dir);
     }
-    let nested = p.join("plugins").join("Rune").join("scripts");
+    let nested = dir.join("plugins/Rune/scripts");
     if nested.is_dir() {
         return Ok(nested);
     }
@@ -78,6 +78,46 @@ fn canonicalize_scripts(p: &Path) -> Result<PathBuf> {
         "{} is neither a Rune scripts folder nor a server root containing one",
         p.display()
     ))
+}
+
+pub fn list(args: ScriptsArgs) -> Result<()> {
+    let scripts = resolve(args.scripts.as_deref())?;
+    let installs = collect_installed(&scripts)?;
+    if installs.is_empty() {
+        println!("No Runebook packages installed in {}", scripts.display());
+    }
+    for (_, lock) in installs {
+        println!("{}\t{}\t{}", lock.name, lock.version, lock.registry);
+    }
+    Ok(())
+}
+
+pub fn collect_installed(scripts_dir: &Path) -> Result<Vec<(PathBuf, InstallLock)>> {
+    let mut installs = Vec::new();
+    let entries = std::fs::read_dir(scripts_dir)
+        .with_context(|| format!("reading {}", scripts_dir.display()))?;
+    for entry in entries {
+        let entry = entry?;
+        if !entry.file_type()?.is_dir() || entry.file_name().to_string_lossy().starts_with('.') {
+            continue;
+        }
+        let dir = entry.path();
+        if let Some(lock) = read_lock(&dir)? {
+            installs.push((dir, lock));
+        }
+    }
+    installs.sort_by(|a, b| a.1.name.cmp(&b.1.name));
+    Ok(installs)
+}
+
+/// Serialize changes to one scripts folder across CLI processes. Keep the
+/// lock file on disk so all contenders lock the same file.
+pub fn lock_directory(dir: &Path) -> Result<File> {
+    let path = dir.join(".rune-cli.lock");
+    let file = OpenOptions::new().write(true).create(true).truncate(false).open(&path)
+        .with_context(|| format!("opening {}", path.display()))?;
+    file.try_lock().with_context(|| format!("locking {} (another Rune command may be running)", path.display()))?;
+    Ok(file)
 }
 
 fn looks_like_scripts_dir(p: &Path) -> bool {

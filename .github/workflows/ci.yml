@@ -34,7 +34,7 @@ jobs:
           - target: linux-x64
             runner: ubuntu-latest
           - target: macos-arm64
-            runner: macos-14
+            runner: macos-15
 
     steps:
       - uses: actions/checkout@v4

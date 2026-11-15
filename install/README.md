@@ -1,5 +1,10 @@
 # Rune install scripts
 
+To install the CLI on its own, use the [standalone installer](https://runemc.dev/install).
+To add the plugin to an existing Paper server, run `rune setup` from the server
+folder or `rune setup <path>`. The scripts below are bundled for bootstrapping a
+new server or scaffolding directly inside a server directory.
+
 > Easiest path: download the install bundle from the [latest GitHub Release](../../releases/latest). The zip contains everything below plus a pre-built plugin jar for your platform.
 
 ---

@@ -38,13 +38,16 @@ async fn main() -> anyhow::Result<()> {
         .init();
 
     let result = match cli.command {
+        Command::Setup(args) => commands::setup::run(args).await,
         Command::Init(args) => commands::init::run(args).await,
+        Command::Check(args) => commands::pack::check(args),
         Command::Pack(args) => commands::pack::run(args).await,
         Command::Publish(args) => commands::publish::run(args).await,
         Command::Login(args) => commands::login::run(args).await,
         Command::Logout => commands::logout::run().await,
         Command::Whoami => commands::whoami::run().await,
         Command::Add(args) => commands::add::run(args).await,
+        Command::List(args) => commands::install_dir::list(args),
         Command::Remove(args) => commands::remove::run(args).await,
         Command::Update(args) => commands::update::run(args).await,
         Command::UpdateCli(args) => commands::update_cli::run(args).await,

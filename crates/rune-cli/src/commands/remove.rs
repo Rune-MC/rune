@@ -17,7 +17,13 @@ use crate::cli::RemoveArgs;
 use crate::commands::install_dir;
 
 pub async fn run(args: RemoveArgs) -> Result<()> {
+    let name_to_validate = match args.name.strip_prefix('@') {
+        Some(flattened) if !flattened.contains('/') => flattened,
+        _ => &args.name,
+    };
+    crate::config::validate_name(name_to_validate)?;
     let scripts_dir = install_dir::resolve(args.scripts.as_deref())?;
+    let _guard = install_dir::lock_directory(&scripts_dir)?;
     let basename = install_dir::dir_name(&args.name);
     let target_dir = scripts_dir.join(&basename);
 
@@ -38,6 +44,9 @@ pub async fn run(args: RemoveArgs) -> Result<()> {
             install_dir::LOCKFILE,
         )
     })?;
+    if lock.name != args.name && install_dir::dir_name(&lock.name) != args.name {
+        bail!("{} contains {}, not {}", target_dir.display(), lock.name, args.name);
+    }
 
     println!(
         "{} {} {} {}",

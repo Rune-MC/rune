@@ -15,7 +15,6 @@
 //! lose to "0.1.2". The npm-deps install at the end of each update runs
 //! through the same pkg_manager helper `rune add` uses.
 
-use std::path::PathBuf;
 use std::sync::Arc;
 
 use anyhow::{Context, Result, anyhow};
@@ -35,8 +34,8 @@ pub async fn run(args: UpdateArgs) -> Result<()> {
         .unwrap_or_default();
     let client = Arc::new(Client::new(args.registry.clone(), token)?);
 
-    let candidates = collect_installed(&scripts_dir)?;
-    if candidates.is_empty() {
+    let candidates = install_dir::collect_installed(&scripts_dir)?;
+    if candidates.is_empty() && args.name.is_none() {
         println!(
             "{} no installed Runes under {}",
             style("•").dim(),
@@ -127,6 +126,9 @@ pub async fn run(args: UpdateArgs) -> Result<()> {
             style("next:").dim(),
         );
     }
+    if failed > 0 {
+        anyhow::bail!("failed to update {failed} installed Rune(s)");
+    }
     Ok(())
 }
 
@@ -173,29 +175,4 @@ async fn update_one(
         from: format!("v{}", lock.version),
         to: format!("v{latest}"),
     })
-}
-
-/// Walk every immediate subdir of `scripts_dir` and collect the ones
-/// that carry a CLI-written lockfile. We only consider direct children;
-/// nested installs (a script that contains another script's source) are
-/// out of scope for v1.
-fn collect_installed(
-    scripts_dir: &std::path::Path,
-) -> Result<Vec<(PathBuf, install_dir::InstallLock)>> {
-    let mut out: Vec<(PathBuf, install_dir::InstallLock)> = Vec::new();
-    let entries = std::fs::read_dir(scripts_dir)
-        .with_context(|| format!("reading {}", scripts_dir.display()))?;
-    for entry in entries {
-        let entry = entry.with_context(|| format!("iterating {}", scripts_dir.display()))?;
-        if !entry.file_type().map(|t| t.is_dir()).unwrap_or(false) {
-            continue;
-        }
-        let dir = entry.path();
-        if let Some(lock) = install_dir::read_lock(&dir)? {
-            out.push((dir, lock));
-        }
-    }
-    // Deterministic order for human-readable output.
-    out.sort_by(|a, b| a.1.name.cmp(&b.1.name));
-    Ok(out)
 }

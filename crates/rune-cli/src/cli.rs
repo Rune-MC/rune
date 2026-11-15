@@ -19,8 +19,14 @@ pub struct Cli {
 
 #[derive(Subcommand, Debug)]
 pub enum Command {
+    /// Install the Rune plugin into an existing Paper server.
+    Setup(SetupArgs),
+
     /// Scaffold a new Rune project in the current directory.
     Init(InitArgs),
+
+    /// Check a project's manifest and publish rules without writing files.
+    Check(CheckArgs),
 
     /// Build a publishable archive locally without uploading.
     Pack(PackArgs),
@@ -28,7 +34,7 @@ pub enum Command {
     /// Pack and publish a Rune to the Runebook.
     Publish(PublishArgs),
 
-    /// Save a Runebook personal access token to ~/.config/rune/token.
+    /// Sign in to Runebook from a browser or with a personal access token.
     Login(LoginArgs),
 
     /// Forget the saved Runebook token.
@@ -41,6 +47,9 @@ pub enum Command {
     #[command(alias = "install")]
     Add(AddArgs),
 
+    /// List Runebook packages installed in a scripts folder.
+    List(ScriptsArgs),
+
     /// Remove an installed Rune from a Minecraft server's scripts folder.
     #[command(alias = "uninstall")]
     Remove(RemoveArgs),
@@ -52,6 +61,25 @@ pub enum Command {
     /// Self-update the `rune` binary from the project's GitHub releases.
     #[command(alias = "upgrade-cli", alias = "self-update")]
     UpdateCli(UpdateCliArgs),
+}
+
+#[derive(Args, Debug)]
+pub struct SetupArgs {
+    /// Server directory. Defaults to finding a server from the current directory.
+    #[arg(env = "RUNE_SERVER", value_name = "SERVER")]
+    pub server: Option<PathBuf>,
+
+    /// GitHub release tag to install, for example v0.4.4. Defaults to the latest release.
+    #[arg(long, conflicts_with = "jar")]
+    pub version: Option<String>,
+
+    /// Use a local Rune plugin jar for this server's OS instead of downloading one.
+    #[arg(long, value_name = "FILE")]
+    pub jar: Option<PathBuf>,
+
+    /// Run the server's existing start script after installing the plugin.
+    #[arg(long)]
+    pub start: bool,
 }
 
 #[derive(Args, Debug)]
@@ -77,9 +105,13 @@ pub struct InitArgs {
 
 #[derive(clap::ValueEnum, Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Language {
+    #[value(alias = "ts")]
     Typescript,
+    #[value(alias = "js")]
+    Javascript,
     #[value(alias = "py")]
     Python,
+    #[value(hide = true)]
     Wasm,
 }
 
@@ -87,10 +119,25 @@ impl Language {
     pub fn manifest_value(self) -> &'static str {
         match self {
             Language::Typescript => "typescript",
+            Language::Javascript => "javascript",
             Language::Python => "python",
             Language::Wasm => "wasm",
         }
     }
+}
+
+#[derive(Args, Debug)]
+pub struct CheckArgs {
+    /// Start looking for rune.toml here, then search parent directories.
+    #[arg(long, default_value = ".")]
+    pub dir: PathBuf,
+}
+
+#[derive(Args, Debug)]
+pub struct ScriptsArgs {
+    /// Rune scripts folder or Paper server root.
+    #[arg(long, env = "RUNE_SCRIPTS")]
+    pub scripts: Option<PathBuf>,
 }
 
 #[derive(Args, Debug)]
@@ -214,10 +261,13 @@ pub struct RemoveArgs {
 
 #[derive(Args, Debug)]
 pub struct LoginArgs {
-    /// Token to save. If omitted, prompts on stdin. Either way the value
-    /// is written to ~/.config/rune/token with 0o600 perms.
-    #[arg(long)]
+    /// Use a personal access token for CI or automation.
+    #[arg(long, env = "RUNE_TOKEN", hide_env_values = true)]
     pub token: Option<String>,
+
+    /// Print a sign-in code for another device without opening a browser.
+    #[arg(long, conflicts_with = "token")]
+    pub device: bool,
 
     /// Override the registry whose token this is. The token file stores
     /// `(registry, token)` pairs so a user can log in to a dev registry

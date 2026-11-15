@@ -1,4 +1,5 @@
 pub mod add;
+mod browser_login;
 pub mod init;
 pub mod install_dir;
 pub mod login;
@@ -6,7 +7,9 @@ pub mod logout;
 pub mod pack;
 pub mod pkg_manager;
 pub mod publish;
+mod release;
 pub mod remove;
+pub mod setup;
 pub mod update;
 pub mod update_cli;
 pub mod whoami;

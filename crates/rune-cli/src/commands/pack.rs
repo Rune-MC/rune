@@ -31,11 +31,11 @@ use anyhow::{Context, Result, anyhow, bail};
 use console::style;
 use indicatif::{ProgressBar, ProgressStyle};
 
-use crate::cli::PackArgs;
+use crate::cli::{CheckArgs, PackArgs};
 use crate::config::RuneToml;
 use crate::hash::Hash;
 use crate::ignore_filter::Walker;
-use crate::manifest::{FileEntry, Manifest, normalise_relative};
+use crate::manifest::{FileEntry, Manifest, normalise_path, normalise_relative};
 
 pub struct PackResult {
     pub root: PathBuf,
@@ -61,8 +61,7 @@ pub async fn run(args: PackArgs) -> Result<()> {
 }
 
 pub async fn pack(args: &PackArgs) -> Result<PackResult> {
-    let root = RuneToml::find_root(&args.dir)?;
-    let cfg = RuneToml::load(&root)?;
+    let (root, cfg, files) = project_files(&args.dir)?;
     println!(
         "{} {} {}",
         style("Packing").cyan().bold(),
@@ -78,12 +77,6 @@ pub async fn pack(args: &PackArgs) -> Result<PackResult> {
     let blob_dir = out_dir.join("blobs");
     fs::create_dir_all(&blob_dir)
         .with_context(|| format!("creating {}", blob_dir.display()))?;
-
-    let walker = Walker::new(&root, &cfg)?;
-    let files = walker.collect()?;
-    if files.is_empty() {
-        bail!("no files matched the publish rules in `{}`", root.display());
-    }
 
     let pb = ProgressBar::new(files.len() as u64);
     pb.set_style(
@@ -152,6 +145,29 @@ pub async fn pack(args: &PackArgs) -> Result<PackResult> {
         manifest_hash,
         blobs,
     })
+}
+
+pub fn check(args: CheckArgs) -> Result<()> {
+    let (_, cfg, files) = project_files(&args.dir)?;
+    println!("{} {} v{} ({} files)", style("Checked").green().bold(), cfg.name, cfg.version, files.len());
+    Ok(())
+}
+
+fn project_files(dir: &Path) -> Result<(PathBuf, RuneToml, Vec<PathBuf>)> {
+    let root = RuneToml::find_root(dir)?;
+    let cfg = RuneToml::load(&root)?;
+    let entry = normalise_path(&cfg.entry);
+    if entry.contains(':') || entry.split('/').any(|part| matches!(part, "" | "." | "..")) {
+        bail!("entry {:?} must be a path relative to rune.toml, such as src/index.ts", cfg.entry);
+    }
+    if !root.join(&entry).is_file() {
+        bail!("entry {:?} is missing. Create the file or update `entry` in rune.toml.", cfg.entry);
+    }
+    let files = Walker::new(&root, &cfg)?.collect()?;
+    if !files.iter().any(|path| normalise_relative(path) == entry) {
+        bail!("entry {:?} will not be packed. Check [publish].include, [publish].exclude, and ignore files.", cfg.entry);
+    }
+    Ok((root, cfg, files))
 }
 
 /// `@alice/foo` is fine inside a manifest but illegal in a Windows

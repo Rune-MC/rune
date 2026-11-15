@@ -33,21 +33,24 @@ export class GiveStick {
 }
 ```
 
-## For server admins (just install)
+## Install
 
-1. Download the platform jar + install bundle from [Releases](../../releases/latest).
-2. Run the bootstrap:
+Install the standalone CLI from any directory.
 
-   ```powershell
-   .\install\install-server.ps1 -ServerPath C:\my-mc
-   ```
-   ```bash
-   ./install/install-server.sh --server ~/my-mc
-   ```
+```bash
+curl -fsSL https://runemc.dev/install.sh | bash
+```
 
-3. Start the server. `plugins/Rune/scripts/` is your scripts dir.
+```powershell
+irm https://runemc.dev/install.ps1 | iex
+```
 
-The plugin jar contains everything (Rust cdylib + libnode) — no Node install required on the server. See [install/README.md](install/README.md) for full options.
+To run scripts on an existing Paper server, stop Paper and run `rune setup`
+from the server directory. You can also pass the directory as a path.
+Restart Paper to initialize Rune, or use `rune setup --start` to run your
+existing launcher. The plugin bundles its Node runtime.
+
+See the [install guide](https://runemc.dev/install) and [CLI reference](crates/rune-cli/README.md).
 
 ## For contributors (build from source)
 

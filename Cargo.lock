@@ -1301,9 +1301,10 @@ dependencies = [
 
 [[package]]
 name = "rune-cli"
-version = "0.4.4"
+version = "0.5.0"
 dependencies = [
  "anyhow",
+ "base64",
  "clap",
  "console",
  "dirs",
@@ -1321,6 +1322,7 @@ dependencies = [
  "serde_json",
  "sha2",
  "tar",
+ "tempfile",
  "thiserror 2.0.18",
  "tokio",
  "toml",
@@ -1333,7 +1335,7 @@ dependencies = [
 
 [[package]]
 name = "rune-host-api"
-version = "0.4.4"
+version = "0.5.0"
 dependencies = [
  "ciborium",
  "serde",
@@ -1343,7 +1345,7 @@ dependencies = [
 
 [[package]]
 name = "rune-loader"
-version = "0.4.4"
+version = "0.5.0"
 dependencies = [
  "ciborium",
  "env_logger",
@@ -1358,7 +1360,7 @@ dependencies = [
 
 [[package]]
 name = "rune-runtime-node"
-version = "0.4.4"
+version = "0.5.0"
 dependencies = [
  "cc",
  "ciborium",

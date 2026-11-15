@@ -58,9 +58,9 @@ pub async fn run(args: AddArgs) -> Result<()> {
         .map(|e| e.token)
         .unwrap_or_default();
     let client = Arc::new(Client::new(args.registry.clone(), token)?);
-    let version = match requested_version {
-        Some(v) => v,
-        None => {
+    let version = match requested_version.as_deref() {
+        Some(v) if semver::Version::parse(v).is_ok() => v.to_string(),
+        requested => {
             println!(
                 "{} latest version of {}...",
                 style("Resolving").cyan().bold(),
@@ -70,12 +70,19 @@ pub async fn run(args: AddArgs) -> Result<()> {
                 .get_rune(&name)
                 .await
                 .with_context(|| format!("looking up {name} on the registry"))?;
-            summary.latest_version.ok_or_else(|| {
-                anyhow!(
-                    "{name} has no released versions yet on {}",
-                    args.registry.as_str().trim_end_matches('/'),
-                )
-            })?
+            if let Some(range) = requested {
+                let requirement = semver::VersionReq::parse(range)
+                    .with_context(|| format!("invalid version requirement {range:?}"))?;
+                pick_version(&summary, &requirement)
+                    .ok_or_else(|| anyhow!("no released version of {name} matches {requirement}"))?
+            } else {
+                summary.latest_version.ok_or_else(|| {
+                    anyhow!(
+                        "{name} has no released versions yet on {}",
+                        args.registry.as_str().trim_end_matches('/'),
+                    )
+                })?
+            }
         }
     };
 
@@ -301,7 +308,10 @@ pub async fn install(
     registry: &url::Url,
     force: bool,
 ) -> Result<Manifest> {
-    if target_dir.exists() {
+    let scripts_dir = target_dir.parent().context("install directory has no parent")?;
+    let _guard = install_dir::lock_directory(scripts_dir)?;
+    let replacing = target_dir.symlink_metadata().is_ok();
+    if replacing {
         if !force {
             bail!(
                 "{} already exists. Re-run with --force to overwrite, or `rune remove {}` first.",
@@ -309,12 +319,11 @@ pub async fn install(
                 install_dir::dir_name(name),
             );
         }
-        // --force: remove the old install before laying down the new
-        // one. We don't merge in place — a half-replaced install is
-        // worse than a clean swap. node_modules vanishes with it, which
-        // is fine: pkg_manager::maybe_install will repopulate at the end.
-        std::fs::remove_dir_all(target_dir)
-            .with_context(|| format!("clearing {}", target_dir.display()))?;
+        if let Some(lock) = install_dir::read_lock(target_dir)? {
+            if lock.name != name {
+                bail!("{} is already used by {}", target_dir.display(), lock.name);
+            }
+        }
     }
 
     // ---- Fetch manifest ----
@@ -441,14 +450,15 @@ pub async fn install(
     }
 
     // ---- 6. Lay down files ----
-    std::fs::create_dir_all(target_dir)
-        .with_context(|| format!("creating {}", target_dir.display()))?;
+    let stage = tempfile::Builder::new().prefix(".rune-stage-").tempdir_in(scripts_dir)?;
+    let staged_dir = stage.path().join("package");
+    std::fs::create_dir(&staged_dir)?;
 
     for file in &manifest.files {
         let bytes = blobs
             .get(&file.hash.to_wire())
             .ok_or_else(|| anyhow!("internal: blob for {} missing after download", file.path))?;
-        let dest = safe_join(target_dir, &file.path)?;
+        let dest = safe_join(&staged_dir, &file.path)?;
         if let Some(parent) = dest.parent() {
             std::fs::create_dir_all(parent)
                 .with_context(|| format!("creating {}", parent.display()))?;
@@ -465,7 +475,22 @@ pub async fn install(
         registry: registry.as_str().trim_end_matches('/').to_string(),
         installed_at: now_rfc3339_ish(),
     };
-    install_dir::write_lock(target_dir, &lock)?;
+    install_dir::write_lock(&staged_dir, &lock)?;
+
+    let backup = stage.path().join("previous");
+    if replacing {
+        std::fs::rename(target_dir, &backup)
+            .with_context(|| format!("moving aside {}", target_dir.display()))?;
+    }
+    if let Err(error) = std::fs::rename(&staged_dir, target_dir) {
+        if replacing {
+            if let Err(restore_error) = std::fs::rename(&backup, target_dir) {
+                let saved = stage.keep().join("previous");
+                bail!("couldn't install {name}: {error}. Restore {} manually: {restore_error}", saved.display());
+            }
+        }
+        return Err(error).with_context(|| format!("installing into {}", target_dir.display()));
+    }
 
     // ---- 8. npm deps ----
     // Many Runes ship a package.json whose `dependencies` (mongoose,

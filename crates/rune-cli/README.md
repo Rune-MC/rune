@@ -5,25 +5,28 @@ scripting platform. Scaffold, pack, install, and publish Runes from
 your shell.
 
 ```text
-$ rune init my-rune
+$ rune init my-rune --language python
 $ cd my-rune
-$ rune publish
+$ rune check
+$ rune pack
 ```
 
-Cross-platform: Windows, macOS, Linux (x86_64 + aarch64).
+Prebuilt binaries are available for Windows x64, Linux x64, and Apple Silicon Macs.
 
 ## Install
 
-For now: build from the workspace root.
+Use the [standalone installer](https://runemc.dev/install) on Windows, macOS,
+or Linux. You can scaffold and package projects without a Minecraft server.
+From source, build from the workspace root.
 
 ```sh
 cargo build --release -p rune-cli
 # produces target/release/rune[.exe]
 ```
 
-The published binary releases (and the `irm runemc.dev/install.ps1 |
-iex` / `curl -fsSL runemc.dev/install.sh | bash` one-liners) come from
-the project's release pipeline.
+To install the plugin, stop Paper and run `rune setup` from the server
+directory or pass the path as an argument. Start Paper to generate Rune's
+config and types. Add `--start` to use your existing launcher.
 
 `rune pack` ships file bytes verbatim — there is no pack-time
 transform. The Rune runtime has its own loader-side esbuild that
@@ -35,16 +38,25 @@ a target the runtime is free to bump.
 
 | Command | What it does |
 |---|---|
-| `rune init [dir]` | Scaffolds `rune.toml`, `src/index.ts`, `.runeignore`, `README.md`. |
+| `rune setup [server]` | Installs the plugin and prepares the scripts directory on an existing Paper server. |
+| `rune init [dir]` | Scaffolds a project in TypeScript, JavaScript, or Python. |
+| `rune check` | Validates the manifest and checks whether the entry point will be packed. |
 | `rune pack` | Walks the project, hashes every file, writes the manifest + per-blob files + a `*.tar.zst` archive to `dist/`. |
 | `rune publish` | Runs `pack`, then uploads missing blobs to R2 and finalises the version on Runebook. |
 | `rune add <spec>` | Installs a published Rune into a server's `plugins/Rune/scripts/`. Aliased as `rune install`. |
 | `rune remove <name>` | Uninstalls a previously-installed Rune. Aliased as `rune uninstall`. |
-| `rune login` | Prompts for a PAT and saves it to `~/.config/rune/token`. |
+| `rune list` | Lists packages that the CLI installed, including their version and registry. |
+| `rune update [name]` | Updates installed packages. |
+| `rune update-cli` | Updates the CLI from GitHub Releases. |
+| `rune login` | Opens a browser on a desktop. On a headless host, prints a link and code to finish on another device. |
 | `rune logout` | Removes the saved token. |
 | `rune whoami` | Probes `/api/v1/whoami` for each saved token; prints username + scopes. |
 
 Add `--verbose` to any command for DEBUG-level tracing on stderr.
+
+Use `rune login --device` to sign in from another device even on a desktop.
+For automation, use `rune login --token <PAT>` or set `RUNE_TOKEN` before running
+`rune login`. Browser-issued credentials expire after 30 days.
 
 ## Environment variables
 
@@ -57,6 +69,8 @@ overridden by an accidentally-committed `.env`.
 |---|---|---|
 | `RUNEBOOK_URL` | `publish`, `login`, `whoami`, `add` | Registry base URL. Defaults to `https://runemc.dev`. Set to `http://localhost:3000` to publish against a local dev instance of the website. |
 | `RUNE_SCRIPTS` | `add`, `remove` | Path to a server's `plugins/Rune/scripts/` (or a server root containing one). Skips the auto-detection of cwd. |
+| `RUNE_SERVER` | `setup` | Server directory when no argument is supplied. |
+| `RUNE_CONFIG_DIR` | Runebook commands | Override Rune's per-user credential directory. |
 
 Example `.env` for working against a local Runebook:
 

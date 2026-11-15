@@ -11,11 +11,10 @@ use crate::auth;
 
 pub async fn run() -> Result<()> {
     let path = auth::token_path()?;
-    if !path.exists() {
+    if !auth::clear()? {
         println!("Not logged in.");
         return Ok(());
     }
-    std::fs::remove_file(&path)?;
     println!(
         "{} Forgot saved token at {}",
         style("✓").green().bold(),

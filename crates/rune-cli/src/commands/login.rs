@@ -1,6 +1,4 @@
-//! `rune login` — save a Runebook PAT for future publishes.
-
-use std::io::{self, Write};
+//! `rune login` — authorize this CLI to use Runebook.
 
 use anyhow::{Context, Result, bail};
 use console::style;
@@ -12,7 +10,7 @@ use crate::registry::Client;
 pub async fn run(args: LoginArgs) -> Result<()> {
     let token = match args.token {
         Some(t) => t,
-        None => prompt_for_token(&args.registry)?,
+        None => super::browser_login::run(&args.registry, args.device).await?,
     };
     let token = token.trim().to_string();
 
@@ -51,16 +49,4 @@ pub async fn run(args: LoginArgs) -> Result<()> {
         style(scopes).dim(),
     );
     Ok(())
-}
-
-fn prompt_for_token(registry: &url::Url) -> Result<String> {
-    let prompt = format!(
-        "Paste a Rune personal access token from {}/dashboard/tokens:\n> ",
-        registry.as_str().trim_end_matches('/'),
-    );
-    print!("{prompt}");
-    io::stdout().flush().ok();
-    let mut buf = String::new();
-    io::stdin().read_line(&mut buf).context("reading stdin")?;
-    Ok(buf)
 }

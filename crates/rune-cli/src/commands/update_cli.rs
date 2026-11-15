@@ -18,22 +18,18 @@
 //! the CLI on PATH.
 
 use std::path::Path;
-use std::time::Duration;
 
-use anyhow::{Context, Result, anyhow, bail};
+use anyhow::{Context, Result};
 use console::style;
-use reqwest::header::{ACCEPT, HeaderMap, HeaderValue, USER_AGENT};
 use semver::Version;
-use serde::Deserialize;
 
 use crate::cli::UpdateCliArgs;
 
-const GITHUB_REPO: &str = "Rune-MC/rune";
-const UA: &str = concat!("rune-cli/", env!("CARGO_PKG_VERSION"));
+use super::release;
 const CURRENT_VERSION: &str = env!("CARGO_PKG_VERSION");
 
 pub async fn run(args: UpdateCliArgs) -> Result<()> {
-    let platform = detect_platform()?;
+    let platform = release::platform()?;
     let installed = Version::parse(CURRENT_VERSION).with_context(|| {
         format!("CARGO_PKG_VERSION {CURRENT_VERSION} is not valid semver — build bug")
     })?;
@@ -41,12 +37,12 @@ pub async fn run(args: UpdateCliArgs) -> Result<()> {
     println!(
         "{} latest rune-cli release from {}",
         style("Checking").cyan().bold(),
-        style(format!("github.com/{GITHUB_REPO}")).dim(),
+        style(format!("github.com/{}", release::REPO)).dim(),
     );
 
-    let release = fetch_latest_release().await?;
-    let tag = release.tag_name.trim_start_matches('v').to_string();
-    let latest = Version::parse(&tag)
+    let release = release::fetch(None).await?;
+    let tag = release.version();
+    let latest = Version::parse(tag)
         .with_context(|| format!("release tag {:?} is not valid semver", release.tag_name))?;
 
     println!(
@@ -73,31 +69,12 @@ pub async fn run(args: UpdateCliArgs) -> Result<()> {
         return Ok(());
     }
 
-    let asset_name = format!(
-        "rune-cli-{}-{}{}",
-        tag,
-        platform.suffix,
-        if platform.exe { ".exe" } else { "" }
-    );
-    let asset = release
-        .assets
-        .iter()
-        .find(|a| a.name == asset_name)
-        .ok_or_else(|| {
-            anyhow!(
-                "release v{tag} has no asset named {asset_name}. Available: {}",
-                release
-                    .assets
-                    .iter()
-                    .map(|a| a.name.as_str())
-                    .filter(|n| n.starts_with("rune-cli-"))
-                    .collect::<Vec<_>>()
-                    .join(", "),
-            )
-        })?;
-
+    let asset_name = format!("rune-cli-{tag}-{platform}{}", std::env::consts::EXE_SUFFIX);
+    let asset = release.asset(&asset_name)?;
     let current_exe = std::env::current_exe().context("locating current rune binary")?;
-    let download_to = current_exe.with_extension("download");
+    let parent = current_exe.parent().context("rune binary has no parent directory")?;
+    let stage = tempfile::Builder::new().prefix(".rune-update-").tempdir_in(parent)?;
+    let download_to = stage.path().join(&asset_name);
 
     println!(
         "{} {} ({:.1} MB)",
@@ -106,9 +83,7 @@ pub async fn run(args: UpdateCliArgs) -> Result<()> {
         asset.size as f64 / (1024.0 * 1024.0),
     );
 
-    download_to_file(&asset.browser_download_url, &download_to)
-        .await
-        .with_context(|| format!("downloading {} to {}", asset.browser_download_url, download_to.display()))?;
+    asset.download(&download_to).await?;
 
     // Make the downloaded blob executable on Unix; on Windows the .exe
     // extension itself signals executable, no chmod equivalent needed.
@@ -157,89 +132,15 @@ fn install_in_place(current_exe: &Path, new_file: &Path) -> Result<()> {
         }
         std::fs::rename(current_exe, &backup)
             .with_context(|| format!("moving {} to {}", current_exe.display(), backup.display()))?;
-        std::fs::rename(new_file, current_exe)
-            .with_context(|| format!("moving {} to {}", new_file.display(), current_exe.display()))?;
+        if let Err(error) = std::fs::rename(new_file, current_exe) {
+            std::fs::rename(&backup, current_exe).with_context(|| {
+                format!("install failed ({error}); restore the previous binary at {}", backup.display())
+            })?;
+            return Err(error.into());
+        }
     } else {
         std::fs::rename(new_file, current_exe)
             .with_context(|| format!("moving {} to {}", new_file.display(), current_exe.display()))?;
     }
     Ok(())
 }
-
-async fn fetch_latest_release() -> Result<GhRelease> {
-    let mut headers = HeaderMap::new();
-    headers.insert(USER_AGENT, HeaderValue::from_static(UA));
-    headers.insert(ACCEPT, HeaderValue::from_static("application/vnd.github+json"));
-    let http = reqwest::Client::builder()
-        .timeout(Duration::from_secs(20))
-        .default_headers(headers)
-        .build()
-        .context("building HTTP client")?;
-    let url = format!("https://api.github.com/repos/{GITHUB_REPO}/releases/latest");
-    let resp = http
-        .get(&url)
-        .send()
-        .await
-        .with_context(|| format!("GET {url}"))?;
-    if !resp.status().is_success() {
-        let status = resp.status();
-        let body = resp.text().await.unwrap_or_default();
-        bail!("GitHub returned {status}: {body}");
-    }
-    Ok(resp.json::<GhRelease>().await.context("decoding release JSON")?)
-}
-
-async fn download_to_file(url: &str, dest: &Path) -> Result<()> {
-    let mut headers = HeaderMap::new();
-    headers.insert(USER_AGENT, HeaderValue::from_static(UA));
-    let http = reqwest::Client::builder()
-        // Big enough to fetch a ~10 MB binary on a slow connection.
-        .timeout(Duration::from_secs(120))
-        .default_headers(headers)
-        .build()
-        .context("building HTTP client")?;
-    let resp = http.get(url).send().await.context("starting download")?;
-    if !resp.status().is_success() {
-        bail!("download returned {}", resp.status());
-    }
-    let bytes = resp.bytes().await.context("reading download body")?;
-    std::fs::write(dest, &bytes)
-        .with_context(|| format!("writing {}", dest.display()))?;
-    Ok(())
-}
-
-struct Platform {
-    suffix: &'static str,
-    exe: bool,
-}
-
-/// Match the platform-suffix scheme used by release.yml: `windows-x64`,
-/// `linux-x64`, `macos-arm64`. Anything else: fail with a clear pointer
-/// — we don't ship binaries for it.
-fn detect_platform() -> Result<Platform> {
-    let os = std::env::consts::OS;
-    let arch = std::env::consts::ARCH;
-    match (os, arch) {
-        ("windows", "x86_64") => Ok(Platform { suffix: "windows-x64", exe: true }),
-        ("linux", "x86_64") => Ok(Platform { suffix: "linux-x64", exe: false }),
-        ("macos", "aarch64") => Ok(Platform { suffix: "macos-arm64", exe: false }),
-        _ => bail!(
-            "no prebuilt rune-cli for {os}/{arch}. \
-             Open an issue at https://github.com/{GITHUB_REPO}/issues if you want it added."
-        ),
-    }
-}
-
-#[derive(Debug, Deserialize)]
-struct GhRelease {
-    tag_name: String,
-    assets: Vec<GhAsset>,
-}
-
-#[derive(Debug, Deserialize)]
-struct GhAsset {
-    name: String,
-    browser_download_url: String,
-    size: u64,
-}
-
