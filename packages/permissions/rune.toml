@@ -1,12 +1,12 @@
 name = "@rune/permissions"
-version = "0.2.0"
+version = "0.3.0"
 language = "typescript"
 entry = "index.ts"
-description = "Scoped permissions, temporary ranks, promotion tracks, audit logs, and Adventure player labels."
+description = "In-game Permissions Manager with scoped rules, temporary ranks, promotion tracks, and Adventure player labels."
 license = "Apache-2.0"
 
 [publish]
-include = ["*.ts", "commands/*.ts", "rune.toml", "rune.jsonc", "package.json", "README.md"]
+include = ["*.ts", "commands/*.ts", "gui/*.ts", "rune.toml", "rune.jsonc", "package.json", "README.md"]
 
 [capabilities]
 required = ["host:bukkit"]

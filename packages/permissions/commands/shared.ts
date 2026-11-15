@@ -1,21 +1,12 @@
-import { StorageInputError } from "@rune/storage";
 import { backend } from "../backend.ts";
-import { scopeKey, type Access, type Context, type PermissionState, type Scoped } from "../model.ts";
+import type { Context, PermissionState } from "../model.ts";
+import { fail } from "../validation.ts";
+
+export { fail, named } from "../validation.ts";
 
 export const admin = { permission: "rune.admin" };
 export const verb = ["allow", "deny", "unset"];
-const idPattern = /^[a-z][a-z0-9-]{0,31}$/;
 const uuidPattern = /^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/i;
-export function fail(message: string): never { throw new StorageInputError(message); }
-export function named(value: string) {
-  const key = value.toLowerCase();
-  return idPattern.test(key) ? key : fail("Use a name of 1–32 letters, digits, or hyphens.");
-}
-export function group(data: PermissionState, value: string) {
-  const id = named(value);
-  if (!Object.hasOwn(data.groups, id)) fail("Unknown permission group.");
-  return { id, value: data.groups[id] };
-}
 export const groups = () => Object.keys(backend.value().groups).sort();
 export const tracks = () => Object.keys(backend.value().tracks ?? {}).sort();
 
@@ -57,24 +48,21 @@ export function permissionNode(input: string) {
   return node;
 }
 
-export function playerAccess(data: PermissionState, id: string) {
-  return ((data.players ??= {})[id] ??= {});
-}
-
-export function groupAccess(data: PermissionState, key: string): Access {
-  return group(data, key).value.profile ??= {};
-}
-
-export function matchesContext(value: Scoped, context?: Context) {
-  return scopeKey(value.context) === scopeKey(context);
-}
-
 export function edit(ctx: CommandCtx, action: string, transform: (data: PermissionState) => void) {
-  if (!ctx.sender.isOp()) { ctx.sender.sendMessage("Only server operators can edit access."); return; }
-  const actor = ctx.sender.getName();
+  commit(ctx.sender, action, transform, () => ctx.sender.sendMessage(action), (message) => ctx.sender.sendMessage(message));
+}
+
+export function commit(sender: CommandSender, action: string, transform: (data: PermissionState) => void,
+  done: () => void, reject: (message: string) => void,
+) {
+  if (!sender.isOp() || !sender.hasPermission(admin.permission)) {
+    reject("Only authorized server operators can edit access.");
+    return;
+  }
+  const actor = sender.getName();
   const at = Date.now();
   backend.edit((data) => {
     transform(data);
     data.audit = [...(data.audit ?? []).slice(-199), { actor, action, at }];
-  }, () => ctx.sender.sendMessage(action), (message) => ctx.sender.sendMessage(message));
+  }, done, reject);
 }

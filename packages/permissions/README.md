@@ -5,6 +5,31 @@ existing installation, run `rune update @rune/storage` before
 `rune update @rune/permissions`. Upgrade any installed database adapter as
 well. Existing groups, direct memberships, and storage settings still work.
 
+## In-game Permissions Manager
+
+Run `/permissions gui` in game. Players with `rune.admin` can browse the
+manager. Editing requires operator status as well.
+
+- **Groups** — create and delete groups, set weights, edit direct parents,
+  view inherited parents and members, assign ranks, and manage rules and labels.
+- **Players** — open online or known offline players by name, or enter a
+  UUID. Manage primary groups, permanent and temporary grants, direct rules,
+  and player-specific labels. Preview resolved prefixes and suffixes.
+- **Effective access** — browse the resolved permissions and their sources,
+  or test a concrete node in a chosen server or world. For an online player
+  in their current context, the result also shows Bukkit's actual decision.
+- **Promotion tracks** — create, reorder, and delete tracks, then preview and
+  confirm the next rank when promoting or demoting a player.
+- **Audit and settings** — search the latest 200 data edits and manage the
+  local display-name, tab-list, and stacking options. Storage status is visible
+  here. To select a backend, set the environment before restarting.
+
+Lists support search and pagination. For rules, right-click the node field
+to browse registered permissions. Right-click context and duration fields
+for presets. Text fields accept chat input for 60 seconds and suppress the
+message while the prompt is active. Type `!cancel` to return to the editor,
+or use `/permissions input <text>` to submit through a command.
+
 ## Groups and player labels
 
 ```text

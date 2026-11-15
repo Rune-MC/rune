@@ -1,5 +1,5 @@
-import { replaceWhere } from "../model.ts";
-import { admin, edit, expiry, fail, group, groups, matchesContext, parseContext, permissionNode, playerAccess, target, verb } from "./shared.ts";
+import { grant, membership, primary, setRule } from "../changes.ts";
+import { admin, edit, expiry, fail, groups, parseContext, permissionNode, target, verb } from "./shared.ts";
 
 @Command("permissions member", admin)
 export class GroupMember {
@@ -9,15 +9,7 @@ export class GroupMember {
   @Run run(ctx: CommandCtx) {
     if (!this.target) return;
     const id = String(this.target.getUniqueId()).toLowerCase();
-    edit(ctx, `Updated global membership for ${this.target.getName()}: ${this.group}.`, (data) => {
-      const rank = group(data, this.group).id;
-      if (rank === "default") fail("Everyone already belongs to default.");
-      const memberships = new Set(data.members[id] ?? []);
-      if (this.enabled === false) memberships.delete(rank);
-      else memberships.add(rank);
-      if (memberships.size) data.members[id] = [...memberships];
-      else delete data.members[id];
-    });
+    edit(ctx, `Updated global membership for ${this.target.getName()}: ${this.group}.`, membership(id, this.group, this.enabled !== false));
   }
 }
 
@@ -25,22 +17,7 @@ function groupGrant(ctx: CommandCtx, input: string, name: string, scope?: string
   const who = target(input);
   if (!who) { ctx.sender.sendMessage("Use an online player name or an offline UUID."); return; }
   const action = `${revoke ? "Revoked" : "Granted"} ${name} ${revoke ? "from" : "to"} ${who.name} (${scope ?? "global"}).`;
-  edit(ctx, action, (data) => {
-    const rank = group(data, name).id;
-    if (rank === "default") fail("Everyone already belongs to default.");
-    const context = parseContext(scope);
-    const expiresAt = expiry(duration);
-    const user = playerAccess(data, who.id);
-    if (!context) {
-      const remaining = (data.members[who.id] ?? []).filter((item) => item !== rank);
-      if (!revoke && !expiresAt) remaining.push(rank);
-      if (remaining.length) data.members[who.id] = remaining;
-      else delete data.members[who.id];
-    }
-    user.grants = replaceWhere(user.grants,
-      (grant) => grant.group === rank && matchesContext(grant, context),
-      revoke || (!context && !expiresAt) ? undefined : { group: rank, context, expiresAt });
-  });
+  edit(ctx, action, (data) => grant(who.id, name, parseContext(scope), expiry(duration), revoke)(data));
 }
 
 @Command("permissions grant", admin)
@@ -75,9 +52,8 @@ export class UserRule {
       const node = permissionNode(this.node);
       const context = parseContext(this.context);
       const expiresAt = expiry(this.duration);
-      const user = playerAccess(data, who.id);
-      user.rules = replaceWhere(user.rules, (rule) => rule.node === node && matchesContext(rule, context),
-        this.value === "unset" ? undefined : { node, allow: this.value === "allow", context, expiresAt });
+      setRule({ type: "player", id: who.id }, node, context,
+        this.value === "unset" ? undefined : { node, allow: this.value === "allow", context, expiresAt })(data);
     });
   }
 }
@@ -89,10 +65,6 @@ export class PrimaryGroup {
   @Run run(ctx: CommandCtx) {
     const who = target(this.player);
     if (!who) { ctx.sender.sendMessage("Use an online player name or an offline UUID."); return; }
-    edit(ctx, `Updated primary group for ${who.name}.`, (data) => {
-      const access = playerAccess(data, who.id);
-      if (this.group) access.primary = group(data, this.group).id;
-      else delete access.primary;
-    });
+    edit(ctx, `Updated primary group for ${who.name}.`, primary(who.id, this.group));
   }
 }

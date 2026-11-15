@@ -4,7 +4,8 @@ import { createCooldowns } from "@rune/cooldowns";
 import { createRateLimiter } from "@rune/rate-limit";
 import { numberedLines, paginate } from "@rune/pagination";
 import { WindowDetector } from "../anticheat/detector.ts";
-import { reachable, rulesFor, type Group } from "../permissions/model.ts";
+import { createGroup, editGrant, grant, moveTrack, setLabel, setRule, setTrack } from "../permissions/changes.ts";
+import { initial, reachable, rulesFor, type Group } from "../permissions/model.ts";
 import { nextExpiration, resolveProfile } from "../permissions/resolve.ts";
 
 test("cooldowns and rate limits refill without exceeding the key budget", () => {
@@ -80,6 +81,40 @@ test("permissions preserve legacy memberships and resolve scoped ranks, labels, 
   assert.deepEqual(after.style("prefix"), ["<green>Builder</green>"]);
   assert.deepEqual(after.style("suffix"), []);
   assert.equal(after.exactRules(["build.break"]).get("build.break"), true);
+});
+
+test("permission editor moves legacy entries and rejects stale drafts", () => {
+  const data = initial();
+  createGroup("guide")(data);
+  createGroup("senior")(data);
+  const subject = { type: "group", id: "guide" } as const;
+  const context = { world: "lobby" };
+  const oldRule = { node: "build.place", allow: false };
+  data.groups.guide.rules[oldRule.node] = oldRule.allow;
+  const rule = { ...oldRule, allow: true, context };
+  setRule(subject, rule.node, context, rule, oldRule)(data);
+  assert.deepEqual(data.groups.guide.rules, {});
+  assert.deepEqual(data.groups.guide.profile?.rules, [rule]);
+  assert.throws(() => setRule(subject, rule.node, context, rule, oldRule)(structuredClone(data)), /rule changed/);
+  assert.throws(() => setRule(subject, rule.node, context, rule, null)(structuredClone(data)), /already uses/);
+
+  const oldLabel = { text: "<aqua>Guide</aqua>", priority: 10 };
+  setLabel(subject, "prefix", oldLabel.priority, undefined, oldLabel)(data);
+  const label = { ...oldLabel, priority: 20, context };
+  setLabel(subject, "prefix", label.priority, context, label, oldLabel)(data);
+  assert.deepEqual(data.groups.guide.profile?.prefix, [label]);
+
+  grant("alex", "guide")(data);
+  editGrant("alex", { group: "guide", context, expiresAt: 5_000 }, { group: "guide" })(data);
+  assert.equal(data.members.alex, undefined);
+  assert.equal(resolveProfile(data, "alex", context, 1_000).primary, "guide");
+  assert.throws(() => editGrant("alex", undefined, { group: "guide" })(structuredClone(data)), /grant changed/);
+
+  const steps = ["guide", "senior"];
+  setTrack("staff", steps, null)(data);
+  moveTrack("alex", "staff", 1, steps, -1)(data);
+  assert.throws(() => moveTrack("alex", "staff", 1, steps, -1)(structuredClone(data)), /player rank changed/);
+  assert.deepEqual(data.members.alex, ["guide"]);
 });
 
 test("anticheat reports sustained windows and clears on discontinuity", () => {

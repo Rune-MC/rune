@@ -1,10 +1,9 @@
-import { replaceWhere } from "../model.ts";
-import { admin, edit, fail, groupAccess, groups, matchesContext, parseContext, playerAccess, target } from "./shared.ts";
+import { setLabel, type LabelKind, type Subject } from "../changes.ts";
+import { admin, edit, groups, parseContext, target } from "./shared.ts";
 
 const priorities = { type: "int", min: -100000, max: 100000 } as const;
-type Kind = "prefix" | "suffix";
 
-function label(ctx: CommandCtx, subject: string, kind: Kind, priority: number, input: string, scope?: string) {
+function label(ctx: CommandCtx, subject: string, kind: LabelKind, priority: number, input: string, scope?: string) {
   const text = input.trim();
   if (!text || text.length > 160) { ctx.sender.sendMessage("Use 1–160 characters of MiniMessage."); return; }
   if (text !== "-") {
@@ -18,9 +17,9 @@ function label(ctx: CommandCtx, subject: string, kind: Kind, priority: number, i
   }
   edit(ctx, `Updated ${kind} ${priority} for ${subject} (${scope ?? "global"}).`, (data) => {
     const context = parseContext(scope);
-    const access = person ? playerAccess(data, person.id) : groupAccess(data, subject.replace(/^group:/, ""));
-    access[kind] = replaceWhere(access[kind], (item) => item.priority === priority && matchesContext(item, context),
-      text === "-" ? undefined : { priority, text, context });
+    const owner: Subject = person ? { type: "player", id: person.id } :
+      { type: "group", id: subject.replace(/^group:/, "") };
+    setLabel(owner, kind, priority, context, text === "-" ? undefined : { priority, text, context })(data);
   });
 }
 
@@ -43,7 +42,7 @@ export class Suffix {
 @Command("permissions label", admin)
 export class ScopedLabel {
   @Arg("subject", { type: "string" }) subject!: string;
-  @Arg("kind", { type: "word", suggest: ["prefix", "suffix"] }) kind!: Kind;
+  @Arg("kind", { type: "word", suggest: ["prefix", "suffix"] }) kind!: LabelKind;
   @Arg("priority", priorities) priority!: number;
   @Arg("context", { type: "string" }) context!: string;
   @Arg("text", { type: "greedy" }) text!: string;
