@@ -16,7 +16,9 @@ import { Card, Details, Shell, Table } from "./ui.tsx";
 const headers = {
   "Cache-Control": "no-store",
   "Content-Security-Policy": "default-src 'none'; script-src 'self'; style-src 'self'; connect-src 'self'; img-src 'self' data:; form-action 'self'; frame-ancestors 'none'; base-uri 'none'",
-  "X-Content-Type-Options": "nosniff", "Referrer-Policy": "no-referrer",
+  "X-Content-Type-Options": "nosniff",
+  // A no-referrer policy makes browsers send Origin: null on same-origin form posts.
+  "Referrer-Policy": "same-origin",
 };
 const html = (node: React.ReactNode) => "<!doctype html>" + renderToStaticMarkup(node);
 const same = (a: string, b: string) => {
