@@ -13,6 +13,7 @@ export interface Label extends Scoped { text: string; priority: number }
 export interface Access { rules?: Rule[]; prefix?: Label[]; suffix?: Label[] }
 export interface PlayerAccess extends Access { grants?: Grant[]; primary?: string }
 export interface Audit { actor: string; action: string; at: number }
+export interface ChatSettings { enabled?: boolean; formats?: Record<string, string> }
 
 export interface PermissionState {
   groups: Record<string, Group>;
@@ -20,6 +21,7 @@ export interface PermissionState {
   players?: Record<string, PlayerAccess>;
   tracks?: Record<string, string[]>;
   audit?: Audit[];
+  chat?: ChatSettings;
 }
 
 export const emptyGroup = (): Group => ({ parents: [], rules: {} });

@@ -1,6 +1,7 @@
 # @rune/permissions
 
-Manage Paper permissions, ranks, and player labels from an in-game GUI or commands.
+Manage Paper permissions, ranks, player labels, and chat formats from an
+in-game GUI or commands.
 
 ## Install and upgrade
 
@@ -13,11 +14,13 @@ run `rune add @rune/paper-ui` and `rune update @rune/storage` before
 `rune update @rune/permissions`.
 Upgrade any installed database adapter as well. Existing groups, direct
 memberships, and storage settings still work.
+Use Rune 0.5.2 or later for live Tab completion and Global chat formatting.
+Update `@rune/moderation` to 0.1.3 or later for per-channel formatting.
 
 ## In-game Permissions Manager
 
-Run `/permissions gui` in game. Players with `rune.admin` can browse the
-manager. Editing requires operator status as well.
+Run `/permissions gui` in game. Grant `rune.permissions.gui` to open the
+manager. Editing ranks and permission rules also requires operator status.
 
 - **Groups** — create and delete groups, set weights, edit direct parents,
   view inherited parents and members, assign ranks, and manage rules and labels.
@@ -29,6 +32,9 @@ manager. Editing requires operator status as well.
   in their current context, the result also shows Bukkit's actual decision.
 - **Promotion tracks** — create, reorder, and delete tracks, then preview and
   confirm the next rank when promoting or demoting a player.
+- **Chat formats** — preview, edit, reset, and toggle Global and per-channel
+  layouts. The editor accepts private chat replies. Staff with channel-management
+  access can open Moderation's channel settings from the same screen.
 - **Audit and settings** — search the latest 200 data edits and manage the
   local display-name, tab-list, and stacking options. Storage status is visible
   here. To select a backend, set the environment before restarting.
@@ -39,6 +45,37 @@ for presets. When a text field opens a prompt, type your reply directly
 in chat within 60 seconds. Your reply goes to the form privately.
 Type `!cancel` to return to the editor. Chat resumes after you reply,
 cancel, or the prompt expires.
+
+## Chat formatting
+
+Global is the default chat channel and uses the `global` format. Set
+`channels` as a shared format for other channels, and override it for
+specific IDs such as `channel-staff` or `channel-trade`. Channels created
+in Moderation appear in Tab completion and in the GUI as soon as they are saved.
+Resetting a channel restores the shared channel format. Formatting starts enabled.
+
+```text
+/permissions chat
+/permissions chat show
+/permissions chat set global <prefix><username><suffix> <gray>»</gray> <message>
+/permissions chat set channel-trade <gold>[<channel>]</gold> <display_name>: <message>
+/permissions chat preview channel-trade
+/permissions chat reset channel-trade
+/permissions chat toggle false
+```
+
+Templates accept MiniMessage. Use `<username>`, `<display_name>`,
+`<prefix>`, `<suffix>`, `<group>`, `<world>`, `<channel>`,
+`<channel_id>`, and `<message>`. Include `<message>` in the visible
+format. The display name can already include a rank prefix or suffix.
+Use the username placeholder when placing labels individually.
+
+Each built-in placeholder also has a percent form such as `%rune_prefix%`
+or `%rune_message%`. With PlaceholderAPI installed, Rune registers these
+for other plugins and resolves third-party placeholders such as
+`%player_name%` from installed expansions. External uses of
+`%rune_channel%` and `%rune_channel_id%` default to Global.
+`%rune_message%` is empty outside the chat formatter.
 
 ## Groups and player labels
 
@@ -107,9 +144,27 @@ returns the primary group and ordered MiniMessage prefix and suffix arrays.
 
 ## Command reference
 
-The base command is `/permissions`. Commands require `rune.admin`,
-and permission changes also require operator status. The GUI has the same
-editing rules.
+The base command is `/permissions`. Tab completes groups, known players,
+permission nodes, contexts, duration presets, tracks, and track members.
+
+| Subcommands | Permission suffix under `rune.permissions.` |
+| --- | --- |
+| `gui` | `gui` |
+| `groups`, `create`, `delete`, `weight`, `inherit` | `group.list`, `group.create`, `group.delete`, `group.weight`, `group.inherit` |
+| `rule`, `user-rule` | `rule.group`, `rule.user` |
+| `member`, `grant`, `revoke`, `primary` | `member.set`, `member.grant`, `member.revoke`, `member.primary` |
+| `prefix`, `suffix`, `label` | `label.prefix`, `label.suffix`, `label.set` |
+| `tracks`, `track-set`, `track-delete`, `promote`, `demote` | `track.list`, `track.set`, `track.delete`, `track.promote`, `track.demote` |
+| `inspect`, `explain`, `audit` | `inspect`, `explain`, `audit` |
+| `chat show`, `chat preview` | `chat.view` |
+| `chat set`, `chat reset`, `chat toggle` | `chat.edit` |
+
+An exact node such as `rune.admin` grants that node alone, apart from any
+children explicitly declared by a Bukkit plugin. A Rune Permissions rule
+such as `rune.permissions.chat.*` matches registered child nodes including
+`chat.view` and `chat.edit`. Use specific namespaces when moving roles
+that previously relied on `rune.admin`. Rune core commands use
+`rune.core.status`, `rune.core.config`, `rune.core.new`, and `rune.core.reload`.
 
 | Subcommand | Arguments and behavior |
 | --- | --- |

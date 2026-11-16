@@ -19,10 +19,12 @@ function playerAction(ctx: CommandCtx, input: string | undefined, action: (playe
 }
 
 const read = (id: string) => homes.value()[id] ?? {};
+const homeNames = (_partial: string, { sender }: CommandSuggestionContext) =>
+  sender.isPlayer ? Object.keys(read(String((sender as unknown as Player).getUniqueId()))).sort() : [];
 
 @Command("home", { description: "Visit your private home" })
 export class HomeVisit {
-  @Arg("destination", { type: "word", optional: true }) destination?: string;
+  @Arg("destination", { type: "word", optional: true, suggest: homeNames }) destination?: string;
   @Run run(ctx: CommandCtx) { playerAction(ctx, this.destination, (player, id, name) => {
     const saved = read(id);
     if (!Object.hasOwn(saved, name)) {
@@ -44,7 +46,7 @@ export class HomeVisit {
 
 @Command("home set")
 export class HomeSet {
-  @Arg("name", { type: "word", optional: true }) name?: string;
+  @Arg("name", { type: "word", optional: true, suggest: homeNames }) name?: string;
   @Run run(ctx: CommandCtx) { playerAction(ctx, this.name, (player, id, name) => {
       const point = snapshot(player.getLocation());
       const limit = config.read()["max-homes"];
@@ -60,7 +62,7 @@ export class HomeSet {
 
 @Command("home delete")
 export class HomeDelete {
-  @Arg("name", { type: "word", optional: true }) name?: string;
+  @Arg("name", { type: "word", optional: true, suggest: homeNames }) name?: string;
   @Run run(ctx: CommandCtx) { playerAction(ctx, this.name, (player, id, name) => {
       homes.edit((data) => {
         const saved = data[id] ?? {};

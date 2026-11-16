@@ -1954,6 +1954,13 @@ const commandHandlers = new Map();
 // avoid colliding with Kotlin-allocated proxy ids (those start at 1 and
 // will never realistically reach 2^32).
 let _suggesterIdNext = 4_294_967_296; // 2^32
+const commandSuggesterIds = new Map();
+
+// Reserved for the host-owned /rune config command, below script IDs.
+proxyImpls.set('4294967295', {
+  className: 'RuneConfigSuggester',
+  methods: { suggest: (input) => runeExtensions.configSuggestions(input) },
+});
 
 function _runeRegister(spec, handler) {
   if (!spec.name || typeof spec.name !== 'string') {
@@ -1998,7 +2005,7 @@ function _runeWalkSpec(spec, runOverride, parentPath) {
     }
   }
   const argsOut = (spec.args || []).map((a) => {
-    const resolved = _resolveSuggest(a.suggest);
+    const resolved = _resolveSuggest(a.suggest, path, a.name);
     return {
       name: String(a.name),
       description: String(a.description || ''),
@@ -2040,23 +2047,34 @@ function _runeWalkSpec(spec, runOverride, parentPath) {
  * The JS dispatcher (`__rune_proxy_dispatch`) routes method
  * "suggest" against the stored function.
  */
-function _resolveSuggest(suggest) {
+function _resolveSuggest(suggest, path, argName) {
   if (suggest == null) return { list: [], suggesterId: null };
   if (Array.isArray(suggest)) {
     return { list: suggest.map(String), suggesterId: null };
   }
   if (typeof suggest === 'function') {
-    const id = _suggesterIdNext++;
-    // Wrap the fn so the bridge sees a "suggest" method on a synthetic
-    // proxy. JS receives [partialInput] as args; user fn can take 0 or
-    // 1 args.
+    const key = JSON.stringify([path, argName]);
+    let id = commandSuggesterIds.get(key);
+    if (id === undefined) {
+      id = _suggesterIdNext++;
+      commandSuggesterIds.set(key, id);
+    }
     proxyImpls.set(String(id), {
       className: 'RuneSuggester',
       methods: {
-        suggest(input) {
+        suggest(input, context) {
           try {
-            const out = suggest(String(input ?? ''));
-            return Array.isArray(out) ? out.map(String) : [];
+            const partial = String(input ?? '');
+            const out = suggest(partial, context);
+            if (!Array.isArray(out)) return [];
+            const prefix = partial.toLowerCase();
+            const matches = new Set();
+            for (const value of out) {
+              const item = String(value);
+              if (item && item.toLowerCase().startsWith(prefix)) matches.add(item);
+              if (matches.size === 256) break;
+            }
+            return [...matches];
           } catch (e) {
             __rune_log_error(
               'dynamic suggester threw: ' + (e && e.stack || e),
@@ -2161,7 +2179,6 @@ const _ARG_META = Symbol('rune:argMeta');   // instance -> [{ propName, name, ..
 const _RUN_META = Symbol('rune:runMeta');   // instance -> propName
 
 globalThis.Arg = function Arg(name, descriptionOrOpts, maybeOpts) {
-  const description = typeof descriptionOrOpts === 'string' ? descriptionOrOpts : '';
   const opts = (typeof descriptionOrOpts === 'object' && descriptionOrOpts !== null)
     ? descriptionOrOpts
     : (maybeOpts || {});
@@ -2174,10 +2191,11 @@ globalThis.Arg = function Arg(name, descriptionOrOpts, maybeOpts) {
       list.push({
         propName: String(context.name),
         name,
-        description,
+        description: typeof descriptionOrOpts === 'string' ? descriptionOrOpts : (opts.description || ''),
         type: opts.type || 'string',
         min: opts.min, max: opts.max,
         greedy: !!opts.greedy, optional: !!opts.optional,
+        suggest: opts.suggest,
       });
     });
   };

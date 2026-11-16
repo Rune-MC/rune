@@ -10,7 +10,8 @@ rune add @rune/npcs
 ```
 
 Restart Paper. Stand where the villager should appear and run these
-commands as an administrator with `rune.admin`.
+commands with `rune.npcs.list`, `rune.npcs.create`, `rune.npcs.say`, or
+`rune.npcs.remove`. On Rune 0.5.2 or later, Tab completes saved NPC IDs.
 
 ```text
 /npc create guide Town Guide

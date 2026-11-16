@@ -1,3 +1,5 @@
+import { directory, type Person } from "../players.ts";
+export type { Person } from "../players.ts";
 import { backend } from "../backend.ts";
 import { editGrant, primary, type Subject } from "../changes.ts";
 import { expiry, fail, groups, parseContext, target } from "../commands/shared.ts";
@@ -9,31 +11,6 @@ import { canEdit, Menu, prompt, save, uuid, type Page } from "./menu.ts";
 import { inspector } from "./inspector.ts";
 import { promotion } from "./tracks.ts";
 import { choose, confirm, expirationText, form, list, scopeText, wrap } from "./widgets.ts";
-
-export type Person = { id: string; name: string; online?: boolean };
-
-let knownPlayers: Person[] = [];
-let knownUntil = 0;
-
-function directory() {
-  const data = backend.value();
-  const players = new Map<string, Person>();
-  for (const id of [...Object.keys(data.members), ...Object.keys(data.players ?? {})]) players.set(id, { id, name: id });
-  if (knownUntil < Date.now()) {
-    const known: OfflinePlayer[] = rune.bukkit.getOfflinePlayers();
-    knownPlayers = known.map((offline) => {
-      const id = uuid(offline);
-      return { id, name: offline.getName() ?? id };
-    });
-    knownUntil = Date.now() + 20_000;
-  }
-  for (const person of knownPlayers) players.set(person.id, person);
-  for (const player of rune.players()) {
-    const id = uuid(player);
-    players.set(id, { id, online: true, name: player.getName() });
-  }
-  return [...players.values()].sort((a, b) => Number(Boolean(b.online)) - Number(Boolean(a.online)) || a.name.localeCompare(b.name));
-}
 
 export function people(back: Page, selected: (person: Person, back: Page) => Page, group?: string): Page {
   const page: Page = list({

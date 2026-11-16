@@ -20,6 +20,7 @@ Use `/home` to return. The unnamed slot is `home`.
 
 Names accept 1–24 letters, digits, underscores, or hyphens and normalize
 to lowercase. Homes are keyed by player UUID. These commands are available in game.
+On Rune 0.5.2 or later, Tab completes your saved home names.
 
 ## Settings and storage
 

@@ -1,0 +1,8 @@
+{
+  "plugins": {
+    "PlaceholderAPI": {
+      "package": "me.clip.placeholderapi",
+      "required": false
+    }
+  }
+}

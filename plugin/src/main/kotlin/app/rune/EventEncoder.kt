@@ -28,9 +28,9 @@ import java.math.BigInteger
  */
 object EventEncoder {
 
-    fun encode(fields: Map<String, Any?>): ByteArray {
+    fun encode(value: Any?): ByteArray {
         val out = ByteArrayOutputStream()
-        CborEncoder(out).encode(toCbor(fields))
+        CborEncoder(out).encode(toCbor(value))
         return out.toByteArray()
     }
 

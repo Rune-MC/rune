@@ -19,12 +19,12 @@ function setCheckpoint(sender: CommandCtx["sender"], checkpoint: "start" | "fini
     () => sender.sendMessage(`Set the arena ${checkpoint}.`), (message) => sender.sendMessage(message));
 }
 
-@Command("arena set-start", { permission: "rune.admin" })
+@Command("arena set-start", { permission: "rune.sprint-arena.set-start" })
 export class SetArenaStart {
   @Run run({ sender }: CommandCtx) { setCheckpoint(sender, "start"); }
 }
 
-@Command("arena set-finish", { permission: "rune.admin" })
+@Command("arena set-finish", { permission: "rune.sprint-arena.set-finish" })
 export class SetArenaFinish {
   @Run run({ sender }: CommandCtx) { setCheckpoint(sender, "finish"); }
 }

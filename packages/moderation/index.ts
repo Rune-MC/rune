@@ -7,8 +7,10 @@ import "./commands/reports.ts";
 import "./commands/chat.ts";
 
 import { channelGui, reportGui } from "./gui/public.ts";
+import { chatSettings } from "./gui/chat.ts";
 import { inGame, run } from "./commands/common.ts";
-import { banFor, punishment } from "./platform.ts";
+import { banFor, can, punishment } from "./platform.ts";
+import { channels } from "./chat.ts";
 
 @Command("channel gui")
 export class ChannelMenu {
@@ -23,4 +25,12 @@ export class ReportMenu {
 rune.services.provide("moderation", 1, {
   active: punishment,
   ban: banFor,
+});
+
+rune.services.provide("moderation-channels", 1, {
+  list: () => Object.entries(channels()).map(([id, channel]) => ({ id, name: channel.name })),
+  canManage: (player: Player) => can(player, "use") && can(player, "chat"),
+  openSettings: (player: Player, back: (player: Player) => void) => {
+    if (can(player, "use") && can(player, "chat")) chatSettings(back)(player);
+  },
 });

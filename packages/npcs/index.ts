@@ -4,7 +4,7 @@ import { paperRecords, StorageInputError } from "@rune/storage";
 interface Npc { id: string; title: string; line: string; at: Position }
 const registry = paperRecords<Npc>(rune, "npcs", "rune-npcs");
 const tagPrefix = "rune-npc:";
-const admin = { permission: "rune.admin" };
+
 const repeat = new Map<string, number>();
 const chunk = (coordinate: number) => Math.floor(coordinate / 16);
 
@@ -106,12 +106,23 @@ function find(data: Record<string, Npc>, input: string) {
   return data[id];
 }
 
-@Command("npc", { ...admin, description: "Manage interactive NPCs" })
+@Command("npc", { description: "Manage interactive NPCs" })
 export class ListNpcs {
-  @Run run({ sender }: CommandCtx) { sender.sendMessage("NPCs: " + (suggestions().join(", ") || "none")); }
+  @Run run({ sender }: CommandCtx) {
+    if (!sender.hasPermission("rune.npcs.list")) {
+      sender.sendMessage("Requires rune.npcs.list.");
+      return;
+    }
+    sender.sendMessage("NPCs: " + (suggestions().join(", ") || "none"));
+  }
 }
 
-@Command("npc create", admin)
+@Command("npc list", { permission: "rune.npcs.list" })
+export class NpcList {
+  @Run run(ctx: CommandCtx) { new ListNpcs().run(ctx); }
+}
+
+@Command("npc create", { permission: "rune.npcs.create" })
 export class CreateNpc {
   @Arg("id", { type: "word" }) id!: string;
   @Arg("title", { type: "greedy", optional: true }) title?: string;
@@ -129,7 +140,7 @@ export class CreateNpc {
   }
 }
 
-@Command("npc say", admin)
+@Command("npc say", { permission: "rune.npcs.say" })
 export class SetNpcDialogue {
   @Arg("id", { type: "word", suggest: suggestions }) id!: string;
   @Arg("line", { type: "greedy", optional: true }) line?: string;
@@ -141,7 +152,7 @@ export class SetNpcDialogue {
   }
 }
 
-@Command("npc remove", admin)
+@Command("npc remove", { permission: "rune.npcs.remove" })
 export class RemoveNpc {
   @Arg("id", { type: "word", suggest: suggestions }) id!: string;
   @Run run(ctx: CommandCtx) {

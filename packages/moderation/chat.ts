@@ -27,7 +27,6 @@ export const policy = () => {
   return Object.hasOwn(policies, server) ? policies[server] : {};
 };
 export const channels = (): Record<string, Channel> => ({ ...backend.value().channels, ...defaults });
-export const channelIds = () => Object.keys(channels()).sort();
 function configuredChannel(id: string) {
   if (Object.hasOwn(defaults, id)) return defaults[id];
   const custom = backend.value().channels;
@@ -92,8 +91,15 @@ export function routeChat(player: Player, text: string, forced?: string) {
   }
   if (id === "global") return false;
   const recipients = rune.players().filter((target) => canAccess(target, id) && (session(target).joined.has(id) || target.equals(player)));
-  const line = `[${configuredChannel(id)?.name ?? id}] ${player.getName()}: ${text}`;
-  for (const target of recipients) tell(target, line, id === "staff" ? "gold" : "aqua");
+  const name = configuredChannel(id)?.name ?? id;
+  const formatter = rune.services.get<{
+    channel(player: Player, channel: { id: string; name: string }, message: string): Component | undefined;
+  }>("chat-format", 1);
+  let formatted: Component | undefined;
+  try { formatted = formatter?.channel(player, { id, name }, text); }
+  catch (error) { console.warn("Could not format channel chat.", error); }
+  if (formatted) rune.adventure.send(recipients, formatted);
+  else for (const target of recipients) tell(target, `[${name}] ${player.getName()}: ${text}`, id === "staff" ? "gold" : "aqua");
   return true;
 }
 

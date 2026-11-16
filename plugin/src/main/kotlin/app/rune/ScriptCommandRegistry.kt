@@ -10,13 +10,14 @@ import com.mojang.brigadier.builder.ArgumentBuilder
 import com.mojang.brigadier.builder.LiteralArgumentBuilder
 import com.mojang.brigadier.builder.RequiredArgumentBuilder
 import com.mojang.brigadier.context.CommandContext
-import com.mojang.brigadier.suggestion.SuggestionProvider
-import com.mojang.brigadier.suggestion.Suggestions
 import com.mojang.brigadier.suggestion.SuggestionsBuilder
-import java.util.concurrent.CompletableFuture
+import co.nstant.`in`.cbor.CborDecoder
+import co.nstant.`in`.cbor.model.Array as CborArray
+import co.nstant.`in`.cbor.model.UnicodeString
 import io.papermc.paper.command.brigadier.CommandSourceStack
 import io.papermc.paper.command.brigadier.Commands
 import io.papermc.paper.command.brigadier.argument.ArgumentTypes
+import org.bukkit.command.CommandSender
 import org.bukkit.entity.Player
 import org.bukkit.plugin.java.JavaPlugin
 
@@ -38,6 +39,7 @@ class ScriptCommandRegistry(
 ) {
     private val specs: MutableList<CommandSpec> = mutableListOf()
     private val brigadierRegistered: MutableSet<String> = mutableSetOf()
+    private val completionArgs = mutableMapOf<Pair<String, String>, CommandArg>()
     /** Roots that have already had a "shape change needs restart" warning. */
     private val warnedShapeFrozen: MutableSet<String> = mutableSetOf()
 
@@ -55,6 +57,8 @@ class ScriptCommandRegistry(
      * root that arg-shape changes need a restart.
      */
     fun queue(spec: CommandSpec) {
+        indexCompletionArgs(spec)
+        registerPermissions(spec)
         if (brigadierRegistered.contains(spec.name)) {
             if (warnedShapeFrozen.add(spec.name)) {
                 plugin.logger.info(
@@ -71,6 +75,22 @@ class ScriptCommandRegistry(
         } else {
             specs.add(spec)
         }
+    }
+
+    fun clearCompletions() = completionArgs.clear()
+
+    private fun indexCompletionArgs(spec: CommandSpec) {
+        for (arg in spec.args) {
+            completionArgs[spec.path to arg.name] = arg
+            arg.subcommands.forEach(::indexCompletionArgs)
+        }
+        spec.subcommands.forEach(::indexCompletionArgs)
+    }
+
+    private fun registerPermissions(spec: CommandSpec) {
+        spec.permission?.let { registerRunePermission(plugin.server.pluginManager, it) }
+        spec.subcommands.forEach(::registerPermissions)
+        spec.args.forEach { it.subcommands.forEach(::registerPermissions) }
     }
 
     /**
@@ -120,9 +140,9 @@ class ScriptCommandRegistry(
         prevArgs: List<CommandArg>,
     ) {
         val argNodes: List<Pair<CommandArg, RequiredArgumentBuilder<CommandSourceStack, *>>> =
-            spec.args.map { arg ->
+            spec.args.mapIndexed { index, arg ->
                 val node = buildArgumentNode(arg)
-                wireSuggestions(node, arg, native)
+                wireSuggestions(node, spec.path, arg, prevArgs + spec.args.take(index), native)
                 arg to node
             }
 
@@ -190,90 +210,40 @@ class ScriptCommandRegistry(
         return out
     }
 
-    /**
-     * Attach the appropriate suggester to `node`. Priority:
-     *   1. Dynamic JS callback (`arg.suggesterId`) -- fires synchronously
-     *      against the V8 isolate on every tab keystroke.
-     *   2. Static snapshot (`arg.suggestions`) -- prefix-filtered list.
-     *   3. Brigadier's built-in (e.g. online players for `player` type).
-     */
     private fun wireSuggestions(
         node: RequiredArgumentBuilder<CommandSourceStack, *>,
+        path: String,
         arg: CommandArg,
+        preceding: List<CommandArg>,
         native: NativeLoader,
     ) {
-        if (arg.suggesterId != null) {
-            node.suggests(dynamicSuggester(arg.suggesterId, native))
-        } else if (arg.suggestions.isNotEmpty()) {
-            node.suggests(staticSuggester(arg.suggestions))
-        }
-    }
-
-    /**
-     * Brigadier SuggestionProvider that returns a fixed list, filtered by
-     * the partial input the user has typed.
-     */
-    private fun staticSuggester(items: List<String>): SuggestionProvider<CommandSourceStack> {
-        return SuggestionProvider { _, builder ->
-            val remaining = builder.remaining.lowercase()
-            for (item in items) {
-                if (item.lowercase().startsWith(remaining)) {
-                    builder.suggest(item)
-                }
-            }
-            builder.buildFuture()
-        }
-    }
-
-    /**
-     * Dynamic JS-callback suggester. On every tab keystroke, calls the
-     * JS function the script registered (via `suggester: () => string[]`)
-     * synchronously against the V8 isolate via the existing proxy
-     * dispatch bridge, then prefix-filters whatever it returns.
-     *
-     * The JS function receives `(partialInput: string)`. Its callback is
-     * stored on the JS side in `proxyImpls` keyed by `suggesterId`; we
-     * invoke method name "suggest" through `invokeJsProxy` which routes
-     * to that table.
-     */
-    private fun dynamicSuggester(
-        suggesterId: Long,
-        native: NativeLoader,
-    ): SuggestionProvider<CommandSourceStack> {
-        return SuggestionProvider { _, builder ->
-            val remaining = builder.remaining
-            // JS handler receives the partial input as its only argument.
-            // CBOR top-level array of [input_string].
-            val argsCbor = encodeStringArray(listOf(remaining))
-            val resultBytes = try {
-                native.invokeJsProxy(suggesterId, "suggest", argsCbor)
-            } catch (e: Throwable) {
-                plugin.logger.warning(
-                    "dynamic suggester $suggesterId failed: ${e.javaClass.simpleName}: ${e.message}"
+        if (arg.suggesterId == null && arg.suggestions.isEmpty()) return
+        val key = path to arg.name
+        node.suggests { ctx, builder ->
+            // The tree survives /rune reload, but callback IDs belong to the current isolate.
+            val source = completionArgs[key] ?: return@suggests builder.buildFuture()
+            val input = if (arg.type == "string") unquotePartial(builder.remaining) else builder.remaining
+            val items = source.suggesterId?.let { id ->
+                val context = mapOf(
+                    "sender" to marshalSender(ctx.source.sender),
+                    "args" to readArgs(ctx, preceding).mapValues { (_, value) -> marshalArg(value) },
                 )
-                return@SuggestionProvider builder.buildFuture()
-            }
-            if (resultBytes.isNotEmpty()) {
-                val items = co.nstant.`in`.cbor.CborDecoder.decode(resultBytes)
-                val first = items.firstOrNull()
-                val list = (first as? co.nstant.`in`.cbor.model.Array)?.dataItems.orEmpty()
-                val lower = remaining.lowercase()
-                for (item in list) {
-                    val s = (item as? co.nstant.`in`.cbor.model.UnicodeString)?.string ?: continue
-                    if (s.lowercase().startsWith(lower)) builder.suggest(s)
-                }
-            }
-            builder.buildFuture()
+                invokeCommandSuggestions(plugin, native, id, listOf(input, context))
+            } ?: source.suggestions
+            addCommandSuggestions(builder, input, items, quote = arg.type == "string")
         }
     }
 
-    /** Encode `items` as a top-level CBOR array of text strings. */
-    private fun encodeStringArray(items: List<String>): ByteArray {
-        val out = java.io.ByteArrayOutputStream()
-        val arr = co.nstant.`in`.cbor.model.Array()
-        for (s in items) arr.add(co.nstant.`in`.cbor.model.UnicodeString(s))
-        co.nstant.`in`.cbor.CborEncoder(out).encode(arr)
-        return out.toByteArray()
+    private fun unquotePartial(input: String): String {
+        val opening = input.firstOrNull()
+        if (opening != '"' && opening != '\'') return input
+        val reader = com.mojang.brigadier.StringReader(input)
+        reader.skip()
+        return try {
+            reader.readStringUntil(opening)
+        } catch (_: com.mojang.brigadier.exceptions.CommandSyntaxException) {
+            input.drop(1).replace("\\$opening", opening.toString()).replace("\\\\", "\\")
+        }
     }
 
     private fun buildArgumentNode(arg: CommandArg): RequiredArgumentBuilder<CommandSourceStack, *> {
@@ -374,12 +344,7 @@ class ScriptCommandRegistry(
     ): Int {
         val sender = ctx.source.sender
         val marshalled: Map<String, Any?> = mapOf(
-            "sender" to mapOf(
-                "__ref" to refRegistry.put(sender),
-                "__class" to sender.javaClass.simpleName,
-                "name" to sender.name,
-                "isPlayer" to (sender is Player),
-            ),
+            "sender" to marshalSender(sender),
             "args" to resolvedArgs.mapValues { (_, v) -> marshalArg(v) },
             // Root command label is the first segment of the dotted path
             // (e.g. "pex" for path "pex.user.add"). Leaf-specific routing
@@ -393,6 +358,13 @@ class ScriptCommandRegistry(
         native.dispatchEvent("__rune_command:${spec.path}", bytes)
         return Command.SINGLE_SUCCESS
     }
+
+    private fun marshalSender(sender: CommandSender) = mapOf(
+        "__ref" to refRegistry.put(sender),
+        "__class" to sender.javaClass.simpleName,
+        "name" to sender.name,
+        "isPlayer" to (sender is Player),
+    )
 
     /**
      * Convert one resolved arg value to its JS-side representation. Player /
@@ -438,3 +410,27 @@ class ScriptCommandRegistry(
         )
     }
 }
+
+internal fun invokeCommandSuggestions(plugin: JavaPlugin, native: NativeLoader, id: Long, args: List<Any?>): List<String> {
+    return try {
+        val bytes = native.invokeJsProxy(id, "suggest", EventEncoder.encode(args))
+        val result = CborDecoder.decode(bytes).firstOrNull() as? CborArray
+        result?.dataItems.orEmpty().mapNotNull { (it as? UnicodeString)?.string }
+    } catch (e: Exception) {
+        plugin.logger.warning("dynamic suggester $id failed: ${e.message}")
+        emptyList()
+    }
+}
+
+internal fun addCommandSuggestions(
+    builder: SuggestionsBuilder,
+    partial: String,
+    items: Iterable<String>,
+    quote: Boolean = false,
+) = builder.apply {
+    items.asSequence()
+        .filter { it.isNotEmpty() && it.startsWith(partial, ignoreCase = true) }
+        .distinct()
+        .take(256)
+        .forEach { suggest(if (quote) StringArgumentType.escapeIfRequired(it) else it) }
+}.buildFuture()

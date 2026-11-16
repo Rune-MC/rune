@@ -3,19 +3,14 @@ import type { Context, PermissionState } from "../model.ts";
 import { fail } from "../validation.ts";
 
 export { fail, named } from "../validation.ts";
+export { target } from "../players.ts";
 
-export const admin = { permission: "rune.admin" };
+export const permit = (action: string) => ({ permission: "rune.permissions." + action });
+export const guiPermission = permit("gui");
 export const verb = ["allow", "deny", "unset"];
-const uuidPattern = /^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/i;
 export const groups = () => Object.keys(backend.value().groups).sort();
 export const tracks = () => Object.keys(backend.value().tracks ?? {}).sort();
 
-export function target(input: string) {
-  if (uuidPattern.test(input)) return { id: input.toLowerCase(), name: input };
-  const online = rune.player(input);
-  if (!online) return undefined;
-  return { id: String(online.getUniqueId()).toLowerCase(), name: online.getName(), world: online.getWorld().getName() };
-}
 
 export function parseContext(input?: string): Context | undefined {
   if (!input || input === "global") return undefined;
@@ -55,7 +50,7 @@ export function edit(ctx: CommandCtx, action: string, transform: (data: Permissi
 export function commit(sender: CommandSender, action: string, transform: (data: PermissionState) => void,
   done: () => void, reject: (message: string) => void,
 ) {
-  if (!sender.isOp() || !sender.hasPermission(admin.permission)) {
+  if (!sender.isOp()) {
     reject("Only authorized server operators can edit access.");
     return;
   }

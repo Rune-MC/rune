@@ -244,6 +244,20 @@ ${settings ? `<section><h2>Settings</h2>${settings}</section>` : ''}${output}
   }
 
   return {
+    configSuggestions(input) {
+      const parts = input.split(/\s+/);
+      if (parts.length === 1) return [...configs.keys()];
+      const [id, key] = parts;
+      const settings = configs.get(id);
+      if (!settings) return [];
+      const prefix = input.slice(0, input.length - parts.at(-1).length);
+      if (parts.length === 2) return Object.keys(settings.schema).map((name) => prefix + name);
+      const field = Object.hasOwn(settings.schema, key) ? settings.schema[key] : undefined;
+      if (!field || parts.length > 3) return [];
+      const values = typeof field.default === 'boolean' ? [true, false] :
+        [settings.read()[key], field.default, field.min, field.max];
+      return values.filter((value) => value !== undefined).map((value) => prefix + value);
+    },
     configCommand({ input, sender }) {
       const [id, key, ...parts] = input.trim().split(/\s+/);
       if (!id) {

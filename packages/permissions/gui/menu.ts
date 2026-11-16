@@ -1,11 +1,11 @@
 import { createMenus, hasPrompt, menuView, tell, uuid } from "@rune/paper-ui";
-import { admin, commit } from "../commands/shared.ts";
+import { guiPermission, commit } from "../commands/shared.ts";
 import type { PermissionState } from "../model.ts";
 
 export { tell, uuid, type Page } from "@rune/paper-ui";
 import type { Page } from "@rune/paper-ui";
 
-export const canView = (player: Player) => player.hasPermission(admin.permission);
+export const canView = (player: Player) => player.hasPermission(guiPermission.permission);
 export const canEdit = (player: Player) => canView(player) && player.isOp();
 export const menus = createMenus({ title: "Permissions", canView });
 export const { Menu, prompt } = menus;

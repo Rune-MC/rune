@@ -1,15 +1,25 @@
+import { contexts, durations, possibleParents, priorities, ranks, ruleNodes } from "./suggestions.ts";
 import { createGroup, deleteGroup, groupWeight, inherit, setRule } from "../changes.ts";
-import { admin, edit, expiry, fail, groups, parseContext, permissionNode, verb } from "./shared.ts";
+import { permit, edit, expiry, fail, groups, parseContext, permissionNode, verb } from "./shared.ts";
 
-@Command("permissions", { ...admin, description: "Manage groups, permissions, and player labels" })
+@Command("permissions", { description: "Manage groups, permissions, and player labels" })
 export class ListGroups {
   @Run run({ sender }: CommandCtx) {
+    if (!sender.hasPermission(permit("group.list").permission)) {
+      sender.sendMessage("Requires rune.permissions.group.list.");
+      return;
+    }
     sender.sendMessage("Groups: " + groups().join(", "));
-    if (sender.isPlayer) sender.sendMessage("Open the Permissions Manager with /permissions gui.");
+    if (sender.isPlayer && sender.hasPermission(permit("gui").permission)) sender.sendMessage("Open the Permissions Manager with /permissions gui.");
   }
 }
 
-@Command("permissions create", admin)
+@Command("permissions groups", permit("group.list"))
+export class Groups {
+  @Run run(ctx: CommandCtx) { new ListGroups().run(ctx); }
+}
+
+@Command("permissions create", permit("group.create"))
 export class CreateGroup {
   @Arg("group", { type: "word" }) group!: string;
   @Run run(ctx: CommandCtx) {
@@ -17,38 +27,38 @@ export class CreateGroup {
   }
 }
 
-@Command("permissions delete", admin)
+@Command("permissions delete", permit("group.delete"))
 export class DeleteGroup {
-  @Arg("group", { type: "word", suggest: groups }) group!: string;
+  @Arg("group", { type: "word", suggest: ranks }) group!: string;
   @Run run(ctx: CommandCtx) {
     edit(ctx, `Deleted group ${this.group}.`, deleteGroup(this.group));
   }
 }
 
-@Command("permissions weight", admin)
+@Command("permissions weight", permit("group.weight"))
 export class GroupWeight {
   @Arg("group", { type: "word", suggest: groups }) group!: string;
-  @Arg("weight", { type: "int", min: -100000, max: 100000 }) weight!: number;
+  @Arg("weight", { type: "int", min: -100000, max: 100000, suggest: priorities }) weight!: number;
   @Run run(ctx: CommandCtx) { edit(ctx, `Set ${this.group} weight to ${this.weight}.`, groupWeight(this.group, this.weight)); }
 }
 
-@Command("permissions inherit", admin)
+@Command("permissions inherit", permit("group.inherit"))
 export class InheritGroup {
   @Arg("group", { type: "word", suggest: groups }) group!: string;
-  @Arg("parent", { type: "word", suggest: groups }) parent!: string;
+  @Arg("parent", { type: "word", suggest: possibleParents }) parent!: string;
   @Arg("enabled", { type: "bool", optional: true }) enabled?: boolean;
   @Run run(ctx: CommandCtx) {
     edit(ctx, `Updated inheritance for ${this.group}: ${this.parent}.`, inherit(this.group, this.parent, this.enabled !== false));
   }
 }
 
-@Command("permissions rule", admin)
+@Command("permissions rule", permit("rule.group"))
 export class GroupRule {
   @Arg("group", { type: "word", suggest: groups }) group!: string;
-  @Arg("node", { type: "string" }) node!: string;
+  @Arg("node", { type: "string", suggest: ruleNodes }) node!: string;
   @Arg("value", { type: "word", suggest: verb }) value!: string;
-  @Arg("context", { type: "string", optional: true }) context?: string;
-  @Arg("duration", { type: "word", optional: true }) duration?: string;
+  @Arg("context", { type: "string", suggest: contexts, optional: true }) context?: string;
+  @Arg("duration", { type: "word", suggest: durations, optional: true }) duration?: string;
   @Run run(ctx: CommandCtx) {
     edit(ctx, `Updated ${this.group} ${this.node}: ${this.value} (${this.context ?? "global"}).`, (data) => {
       const node = permissionNode(this.node);

@@ -4,13 +4,11 @@
   const bridge = (method, ...args) => rune.callStatic('app.rune.AdventurePrimitives', method, ...args);
   const text = (value = '', color) => bridge('text', String(value), color ?? null);
   const component = (value) => typeof value === 'string' || value == null ? text(value ?? '') : value;
-  const miniMessage = (template, values = {}) => {
-    const tags = Object.entries(values).map(([key, value]) =>
+  const messageTags = (values) => Object.entries(values).map(([key, value]) =>
       _looksLikeComponent(value)
         ? bridge('componentTag', key, value)
         : bridge('literalTag', key, String(value)));
-    return bridge('deserialize', String(template ?? ''), tags);
-  };
+  const miniMessage = (template, values = {}) => bridge('deserialize', String(template ?? ''), messageTags(values));
   const formatted = (value) => typeof value === 'string' || value == null ? miniMessage(value) : value;
   const viewers = (target) => Array.isArray(target) ? target : [target];
   const dispatch = (target, method, ...args) => {
@@ -35,6 +33,12 @@
   rune.adventure = Object.freeze({
     text,
     miniMessage,
+    formatChat(event, template, values = {}) {
+      for (const key of ['display_name', 'message']) {
+        if (Object.hasOwn(values, key)) throw new TypeError('Paper supplies the <' + key + '> placeholder');
+      }
+      bridge('formatChat', event, String(template), messageTags(values));
+    },
     format(template, ...values) {
       const replacements = Object.fromEntries(values.map((value, index) => ['rune_arg_' + index, value]));
       const source = template.reduce((result, part, index) =>

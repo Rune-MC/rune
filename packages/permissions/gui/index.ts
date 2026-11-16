@@ -1,6 +1,7 @@
 import { backend } from "../backend.ts";
-import { admin } from "../commands/shared.ts";
+import { guiPermission } from "../commands/shared.ts";
 import { options, server } from "../settings.ts";
+import { canViewChat, chatMenu } from "./chat.ts";
 import { groupList } from "./groups.ts";
 import { canEdit, Menu, tell, type Page } from "./menu.ts";
 import { people, playerPage } from "./people.ts";
@@ -61,11 +62,14 @@ const dashboard: Page = (player) => {
   menu.button(13, "PLAYER_HEAD", "Players", ["Manage online and offline profiles"], () => people(dashboard, playerPage)(player));
   menu.button(15, "LADDER", "Promotion tracks", [`${Object.keys(data.tracks ?? {}).length} tracks`, "Configure ranks and move players"], () => trackList(dashboard)(player));
   menu.button(29, "WRITTEN_BOOK", "Audit history", [`${data.audit?.length ?? 0} recent edits`], () => audit(dashboard)(player));
+  if (canViewChat(player)) {
+    menu.button(31, "WRITABLE_BOOK", "Chat formats", ["Global and per-channel MiniMessage formats"], () => chatMenu(dashboard)(player));
+  }
   menu.button(33, "COMPARATOR", "Settings", ["Label display and storage status"], () => settings(dashboard)(player));
   menu.open();
 };
 
-@Command("permissions gui", { ...admin, description: "Open the Permissions Manager" })
+@Command("permissions gui", { ...guiPermission, description: "Open the Permissions Manager" })
 export class OpenPermissionsMenu {
   @Run run({ sender }: CommandCtx) {
     if (!sender.isPlayer) { sender.sendMessage("Open the Permissions Manager in game."); return; }

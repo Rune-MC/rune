@@ -12,7 +12,9 @@ Restart Paper. Install [@rune/preferences](https://runemc.dev/runebook/r/@rune%2
 
 ## Commands
 
-All commands require `rune.admin`.
+Grant `rune.announcements.list`, `rune.announcements.set`,
+`rune.announcements.send`, or `rune.announcements.delete` for the relevant
+command. On Rune 0.5.2 or later, Tab completes saved announcement IDs.
 
 | Command | Behavior |
 | --- | --- |

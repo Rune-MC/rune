@@ -1,9 +1,10 @@
+import { concreteNodes, contexts, playerNames } from "./suggestions.ts";
 import { backend } from "../backend.ts";
 import { resolveProfile } from "../resolve.ts";
 import { server } from "../settings.ts";
-import { admin, parseContext, permissionNode, target } from "./shared.ts";
+import { permit, parseContext, permissionNode, target } from "./shared.ts";
 
-@Command("permissions inspect", admin)
+@Command("permissions inspect", permit("inspect"))
 export class Inspect {
   @Arg("target", { type: "player" }) target!: Player | null;
   @Run run({ sender }: CommandCtx) {
@@ -16,14 +17,14 @@ export class Inspect {
   }
 }
 
-@Command("permissions explain", admin)
+@Command("permissions explain", permit("explain"))
 export class Explain {
-  @Arg("player", { type: "word" }) player!: string;
-  @Arg("node", { type: "word" }) node!: string;
-  @Arg("context", { type: "string", optional: true }) context?: string;
+  @Arg("player", { type: "word", suggest: playerNames }) player!: string;
+  @Arg("node", { type: "string", suggest: concreteNodes }) node!: string;
+  @Arg("context", { type: "string", suggest: contexts, optional: true }) context?: string;
   @Run run({ sender }: CommandCtx) {
     const who = target(this.player);
-    if (!who) { sender.sendMessage("Use an online player name or an offline UUID."); return; }
+    if (!who) { sender.sendMessage("Use a known player name or UUID."); return; }
     try {
       const node = permissionNode(this.node);
       if (node.endsWith("*")) { sender.sendMessage("Specify a concrete permission to explain."); return; }
@@ -39,9 +40,9 @@ export class Explain {
   }
 }
 
-@Command("permissions audit", admin)
+@Command("permissions audit", permit("audit"))
 export class AuditLog {
-  @Arg("limit", { type: "int", min: 1, max: 50, optional: true }) limit?: number;
+  @Arg("limit", { type: "int", min: 1, max: 50, optional: true, suggest: ["5", "10", "20", "50"] }) limit?: number;
   @Run run({ sender }: CommandCtx) {
     const rows = (backend.value().audit ?? []).slice(-(this.limit ?? 10)).reverse();
     if (!rows.length) sender.sendMessage("No permission changes recorded.");

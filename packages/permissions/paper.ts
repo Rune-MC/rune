@@ -39,6 +39,7 @@ function apply(player: Player, permissionNames?: string[]) {
   decorateName(player, plugin, result.style("prefix", settings["stack-prefixes"]),
     result.style("suffix", settings["stack-suffixes"]),
     [settings["decorate-display-name"], settings["decorate-tab-list"]]);
+  player.updateCommands();
 }
 
 function registered(): string[] {
@@ -56,6 +57,9 @@ export function refresh() {
 
 @Listener
 export class PermissionsLifecycle {
+  @EventHandler(Events.ServerLoadEvent)
+  serverLoaded() { refresh(); }
+
   @EventHandler(Events.PlayerJoinEvent)
   join(event: PlayerJoinEvent) { apply(event.getPlayer()); }
 
@@ -78,6 +82,7 @@ export function startPaper() {
     if (Date.now() >= expires || JSON.stringify(options.read()) !== configured) refresh();
   }, 20);
   rune.services.provide("permissions", 1, {
+    refresh,
     groups: (id: string, context?: Context) => profile(id, context).groups.slice().sort(),
     rules: (id: string, context?: Context) => Object.fromEntries(profile(id, context).exactRules()),
     check: (id: string, node: string, context?: Context) => profile(id, context).explain(node)?.allowed,

@@ -1,5 +1,7 @@
 package app.rune
 
+import io.papermc.paper.chat.ChatRenderer
+import io.papermc.paper.event.player.AsyncChatEvent
 import net.kyori.adventure.audience.Audience
 import net.kyori.adventure.bossbar.BossBar
 import net.kyori.adventure.inventory.Book
@@ -54,6 +56,16 @@ object AdventurePrimitives {
     @JvmStatic
     fun deserialize(template: String, tags: List<TagResolver>): Component =
         miniMessage.deserialize(template, TagResolver.resolver(tags))
+
+    @JvmStatic
+    fun formatChat(event: AsyncChatEvent, template: String, tags: List<TagResolver>) {
+        val placeholders = TagResolver.resolver(tags)
+        event.renderer(ChatRenderer.viewerUnaware { _, displayName, message ->
+            miniMessage.deserialize(template, placeholders,
+                Placeholder.component("display_name", displayName),
+                Placeholder.component("message", message))
+        })
+    }
 
     @JvmStatic
     fun serialize(component: Component, format: String): String = when (format) {

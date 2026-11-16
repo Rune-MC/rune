@@ -1,5 +1,5 @@
 name = "@rune/moderation"
-version = "0.1.2"
+version = "0.1.3"
 language = "typescript"
 entry = "index.ts"
 description = "Paper moderation console and in-game GUI for cases, reports, temporary punishments and chat channels."

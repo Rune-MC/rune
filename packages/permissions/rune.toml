@@ -1,8 +1,8 @@
 name = "@rune/permissions"
-version = "0.3.4"
+version = "0.3.5"
 language = "typescript"
 entry = "index.ts"
-description = "In-game Permissions Manager with scoped rules, temporary ranks, promotion tracks, and Adventure player labels."
+description = "In-game Permissions Manager with scoped rules, temporary ranks, promotion tracks, Adventure player labels, and per-channel chat formatting."
 license = "Apache-2.0"
 
 [publish]

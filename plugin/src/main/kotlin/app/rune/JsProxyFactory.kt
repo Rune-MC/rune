@@ -13,6 +13,7 @@ import java.lang.reflect.Method
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicLong
 import net.bytebuddy.ByteBuddy
+import net.bytebuddy.ClassFileVersion
 import net.bytebuddy.description.method.MethodDescription
 import net.bytebuddy.description.modifier.Visibility
 import net.bytebuddy.dynamic.loading.ClassLoadingStrategy
@@ -98,10 +99,12 @@ object JsProxyFactory {
         // For pure interfaces, subclass Object and implement the interface;
         // ByteBuddy's `subclass(iface)` already handles this internally but
         // being explicit keeps the intent obvious.
+        // Paper's remapper may support an older classfile version than the JVM.
+        val byteBuddy = ByteBuddy(ClassFileVersion.JAVA_V21)
         val raw = if (parent.isInterface) {
-            ByteBuddy().subclass(Any::class.java).implement(parent)
+            byteBuddy.subclass(Any::class.java).implement(parent)
         } else {
-            ByteBuddy().subclass(parent)
+            byteBuddy.subclass(parent)
         }
 
         val unloaded = raw

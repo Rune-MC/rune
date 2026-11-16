@@ -18,7 +18,9 @@ Restart Paper. Stand at the destination and run `/warp set market`.
 | `/warp set <name> [restricted]` | Save current position and facing. |
 | `/warp delete <name>` | Remove the named warp. |
 
-Saving and deleting require `rune.admin`. Set `restricted` to `true` to
+Saving requires `rune.warps.set`. Deleting requires `rune.warps.delete`.
+On Rune 0.5.2 or later, Tab lists the warps you can visit.
+Set `restricted` to `true` to
 allow only operators and users with `rune.warp.<name>`. Omitting it on an
 existing warp preserves that warp's setting. A new warp defaults to public.
 

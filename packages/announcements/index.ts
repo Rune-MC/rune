@@ -1,6 +1,7 @@
 import { paperRecords, StorageInputError } from "@rune/storage";
 
 const messages = paperRecords<string>(rune, "announcements", "rune-announcements");
+const announcementIds = () => Object.keys(messages.value()).sort();
 const config = rune.config("announcements", {
   enabled: { default: true, label: "Rotate messages" },
   "interval-seconds": { default: 300, min: 15, max: 3600, label: "Seconds between announcements" },
@@ -39,16 +40,25 @@ function id(ctx: CommandCtx, input: string) {
   return null;
 }
 
-@Command("announcements", { description: "Manage rotating server messages", permission: "rune.admin" })
+@Command("announcements", { description: "Manage rotating server messages" })
 export class ListAnnouncements {
   @Run run({ sender }: CommandCtx) {
-    sender.sendMessage("Announcements: " + (Object.keys(messages.value()).sort().join(", ") || "none"));
+    if (!sender.hasPermission("rune.announcements.list")) {
+      sender.sendMessage("Requires rune.announcements.list.");
+      return;
+    }
+    sender.sendMessage("Announcements: " + (announcementIds().join(", ") || "none"));
   }
 }
 
-@Command("announcements set", { permission: "rune.admin" })
+@Command("announcements list", { permission: "rune.announcements.list" })
+export class AnnouncementList {
+  @Run run(ctx: CommandCtx) { new ListAnnouncements().run(ctx); }
+}
+
+@Command("announcements set", { permission: "rune.announcements.set" })
 export class SetAnnouncement {
-  @Arg("id", { type: "word" }) id!: string;
+  @Arg("id", { type: "word", suggest: announcementIds }) id!: string;
   @Arg("message", { type: "greedy" }) message!: string;
   @Run run(ctx: CommandCtx) {
       const name = id(ctx, this.id);
@@ -62,9 +72,9 @@ export class SetAnnouncement {
   }
 }
 
-@Command("announcements send", { permission: "rune.admin" })
+@Command("announcements send", { permission: "rune.announcements.send" })
 export class SendAnnouncement {
-  @Arg("id", { type: "word" }) id!: string;
+  @Arg("id", { type: "word", suggest: announcementIds }) id!: string;
   @Run run(ctx: CommandCtx) {
       const name = id(ctx, this.id);
       if (!name) return;
@@ -76,9 +86,9 @@ export class SendAnnouncement {
   }
 }
 
-@Command("announcements delete", { permission: "rune.admin" })
+@Command("announcements delete", { permission: "rune.announcements.delete" })
 export class DeleteAnnouncement {
-  @Arg("id", { type: "word" }) id!: string;
+  @Arg("id", { type: "word", suggest: announcementIds }) id!: string;
   @Run run(ctx: CommandCtx) {
       const name = id(ctx, this.id);
       if (!name) return;

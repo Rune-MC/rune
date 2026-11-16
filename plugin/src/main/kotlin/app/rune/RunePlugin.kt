@@ -288,8 +288,10 @@ class RunePlugin : JavaPlugin() {
     private fun registerAdminCommands() {
         lifecycleManager.registerEventHandler(LifecycleEvents.COMMANDS) { event ->
             val commands = event.registrar()
+            val permissions = listOf("rune.core.reload", "rune.core.status", "rune.core.config", "rune.core.new")
+            permissions.forEach { registerRunePermission(server.pluginManager, it) }
             val root = Commands.literal("rune")
-                .requires { it.sender.hasPermission("rune.admin") || it.sender.isOp }
+                .requires { source -> permissions.any(source.sender::hasPermission) }
                 .then(
                     // Console-only: in-game invocations of /rune reload
                     // crash the JVM inside libnode (V8 isolate teardown
@@ -298,7 +300,9 @@ class RunePlugin : JavaPlugin() {
                     // console sender — the player still sees "Unknown
                     // command" because Brigadier omits filtered nodes.
                     Commands.literal("reload")
-                        .requires { it.sender is org.bukkit.command.ConsoleCommandSender }
+                        .requires {
+                            it.sender is org.bukkit.command.ConsoleCommandSender && it.sender.hasPermission("rune.core.reload")
+                        }
                         .executes { ctx ->
                             val loader = native
                             if (loader == null) {
@@ -310,7 +314,7 @@ class RunePlugin : JavaPlugin() {
                         }
                 )
                 .then(
-                    Commands.literal("status").executes { ctx ->
+                    Commands.literal("status").requires { it.sender.hasPermission("rune.core.status") }.executes { ctx ->
                         val loader = native
                         if (loader == null) {
                             ctx.source.sender.sendMessage("Rune is not initialised.")
@@ -322,9 +326,17 @@ class RunePlugin : JavaPlugin() {
                 )
                 .then(
                     Commands.literal("config")
+                        .requires { it.sender.hasPermission("rune.core.config") }
                         .executes { ctx -> handleConfig(ctx.source.sender, "") }
                         .then(
                             Commands.argument("settings", com.mojang.brigadier.arguments.StringArgumentType.greedyString())
+                                .suggests { _, builder ->
+                                    val loader = native
+                                    val input = builder.remaining
+                                    val items = if (loader == null) emptyList() else
+                                        invokeCommandSuggestions(this@RunePlugin, loader, 4_294_967_295L, listOf(input))
+                                    addCommandSuggestions(builder, input, items)
+                                }
                                 .executes { ctx ->
                                     handleConfig(
                                         ctx.source.sender,
@@ -336,6 +348,7 @@ class RunePlugin : JavaPlugin() {
                 .then(
                     // /rune new <name> [lang]
                     Commands.literal("new")
+                        .requires { it.sender.hasPermission("rune.core.new") }
                         .then(
                             Commands.argument("name", com.mojang.brigadier.arguments.StringArgumentType.word())
                                 .then(
@@ -413,6 +426,7 @@ class RunePlugin : JavaPlugin() {
             // re-register everything as they re-execute.
             refs.clear()
             subs.clear()
+            scriptCommands?.clearCompletions()
             // rune.serve servers belong to the OLD isolate's handler
             // proxies; stop them so the rebuilt isolate can re-bind ports.
             try { HttpServerRegistry.stopAll() } catch (e: Throwable) {

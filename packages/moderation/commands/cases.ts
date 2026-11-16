@@ -4,12 +4,12 @@ import { remaining } from "../duration.ts";
 import { active, fail, isTimed } from "../model.ts";
 import { backend, can, mod, online, person, requirePermission } from "../platform.ts";
 import { dashboard } from "../gui/index.ts";
-import { inGame, pageArg, playerNames, positiveId, printPage, run } from "./common.ts";
+import { caseIds, inGame, pageArg, playerNames, positiveId, printPage, run, searchablePlayers } from "./common.ts";
 
 const help = [
   "/mod gui • Open the moderation dashboard",
   "/mod ban|mute|freeze <player> <duration> <reason>",
-  "/mod ipban <address> <duration> <reason>",
+  "/mod ipban <player-or-address> <duration> <reason>",
   "/mod kick|warn|note <player> <reason>",
   "/mod unban|unmute|unfreeze <player> <reason>",
   "/mod unipban <address> <reason> • /mod revoke <case> <reason>",
@@ -32,7 +32,7 @@ export class ModRoot {
 
 @Command("mod help", mod)
 export class ModHelp {
-  @Arg("page", pageArg) page?: number;
+  @Arg("page", pageArg(() => help.length)) page?: number;
   @Run run({ sender }: CommandCtx) { printPage(sender, "Moderation commands", help, this.page); }
 }
 
@@ -43,7 +43,7 @@ export class ModGui {
 
 @Command("mod cases", mod)
 export class Cases {
-  @Arg("page", pageArg) page?: number;
+  @Arg("page", pageArg(() => backend.value().cases.length)) page?: number;
   @Run run({ sender }: CommandCtx) {
     printPage(sender, "Cases", [...backend.value().cases].reverse().map((row) => describeCase(sender, row)), this.page);
   }
@@ -51,7 +51,7 @@ export class Cases {
 
 @Command("mod active", mod)
 export class ActiveCases {
-  @Arg("page", pageArg) page?: number;
+  @Arg("page", pageArg(() => backend.value().cases.filter((row) => active(row)).length)) page?: number;
   @Run run({ sender }: CommandCtx) {
     printPage(sender, "Active punishments", [...backend.value().cases].reverse().filter((row) => active(row))
       .map((row) => describeCase(sender, row)), this.page);
@@ -60,7 +60,7 @@ export class ActiveCases {
 
 @Command("mod case", mod)
 export class OneCase {
-  @Arg("case", positiveId) id!: number;
+  @Arg("case", { ...positiveId, suggest: caseIds() }) id!: number;
   @Run run({ sender }: CommandCtx) {
     run(sender, () => {
       const item = backend.value().cases.find((row) => row.id === this.id) ?? fail("Case not found.");
@@ -75,7 +75,10 @@ export class OneCase {
 @Command("mod history", mod)
 export class History {
   @Arg("target", { type: "word", suggest: playerNames }) target!: string;
-  @Arg("page", pageArg) page?: number;
+  @Arg("page", pageArg(({ args }) => {
+    const target = person(String(args.target ?? ""));
+    return backend.value().cases.filter((row) => row.target.id === target.id).length;
+  })) page?: number;
   @Run run({ sender }: CommandCtx) {
     run(sender, () => {
       const target = person(this.target);
@@ -103,7 +106,7 @@ export class Inspect {
 
 @Command("mod tp", mod)
 export class TeleportToPlayer {
-  @Arg("target", { type: "word", suggest: playerNames }) target!: string;
+  @Arg("target", { type: "word", suggest: searchablePlayers("teleport", true) }) target!: string;
   @Run run({ sender }: CommandCtx) {
     run(sender, () => {
       requirePermission(sender, "teleport");
@@ -117,7 +120,7 @@ export class TeleportToPlayer {
 
 @Command("mod audit", mod)
 export class AuditTrail {
-  @Arg("page", pageArg) page?: number;
+  @Arg("page", pageArg(({ sender }) => can(sender, "audit") ? backend.value().audit.length : 0)) page?: number;
   @Run run({ sender }: CommandCtx) {
     if (!can(sender, "audit")) { tell(sender, "Requires rune.moderation.audit.", "red"); return; }
     printPage(sender, "Settings and chat activity", [...backend.value().audit].reverse().map((row) =>

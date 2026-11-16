@@ -3,8 +3,27 @@ import { paperRecords, StorageInputError } from "@rune/storage";
 
 interface Warp { point: Position; restricted: boolean }
 const warps = paperRecords<Warp>(rune, "warps", "rune-warps");
-const canVisit = (sender: CommandCtx["sender"], name: string, warp: Warp) =>
+const canVisit = (sender: CommandSender, name: string, warp: Warp) =>
   !warp.restricted || sender.isOp() || sender.hasPermission("rune.warp." + name);
+const visibleWarps = (_partial: string, { sender }: CommandSuggestionContext) =>
+  Object.entries(warps.value()).filter(([name, warp]) => canVisit(sender, name, warp)).map(([name]) => name).sort();
+const warpNames = () => Object.keys(warps.value()).sort();
+
+function registerVisitPermissions() {
+  const manager = rune.bukkit.getPluginManager();
+  let changed = false;
+  for (const [name, warp] of Object.entries(warps.value())) {
+    if (!warp.restricted) continue;
+    const node = "rune.warp." + name;
+    if (!manager.getPermission(node)) {
+      manager.addPermission(new bukkit.permissions.Permission(node, bukkit.permissions.PermissionDefault.OP));
+      changed = true;
+    }
+  }
+  if (changed) rune.services.get<{ refresh(): void }>("permissions", 1)?.refresh?.();
+}
+warps.onChange(registerVisitPermissions);
+rune.schedule.nextTick(registerVisitPermissions);
 
 function warpName(ctx: CommandCtx, input: string) {
   const name = normalizePositionName(input);
@@ -14,12 +33,11 @@ function warpName(ctx: CommandCtx, input: string) {
 
 @Command("warp", { description: "Visit or list server warps" })
 export class VisitWarp {
-  @Arg("destination", { type: "word", optional: true }) destination?: string;
+  @Arg("destination", { type: "word", optional: true, suggest: visibleWarps }) destination?: string;
   @Run
   run(ctx: CommandCtx) {
     if (this.destination == null) {
-      const available = Object.entries(warps.value()).filter(([name, warp]) => canVisit(ctx.sender, name, warp))
-        .map(([name]) => name).sort();
+      const available = visibleWarps("", ctx);
       ctx.sender.sendMessage(available.length ? "Warps: " + available.join(", ") : "No warps are available.");
       return;
     }
@@ -33,9 +51,9 @@ export class VisitWarp {
   }
 }
 
-@Command("warp set", { permission: "rune.admin" })
+@Command("warp set", { permission: "rune.warps.set" })
 export class SaveWarp {
-  @Arg("name", { type: "word" }) name!: string;
+  @Arg("name", { type: "word", suggest: warpNames }) name!: string;
   @Arg("restricted", { type: "bool", optional: true }) restricted?: boolean;
   @Run run(ctx: CommandCtx) {
       if (!ctx.sender.isPlayer) { ctx.sender.sendMessage("Stand at the warp in game."); return; }
@@ -52,9 +70,9 @@ export class SaveWarp {
   }
 }
 
-@Command("warp delete", { permission: "rune.admin" })
+@Command("warp delete", { permission: "rune.warps.delete" })
 export class DeleteWarp {
-  @Arg("name", { type: "word" }) name!: string;
+  @Arg("name", { type: "word", suggest: warpNames }) name!: string;
   @Run run(ctx: CommandCtx) {
       const name = warpName(ctx, this.name);
       if (!name) return;

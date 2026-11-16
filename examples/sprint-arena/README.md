@@ -8,7 +8,8 @@ automatic return to the player's original position.
 1. Install `@rune/storage`. Copy this directory and `examples/game-kit` into
    `plugins/Rune/scripts/` and restart Paper.
 2. Stand at the start and run `/arena set-start`. Set the finish with
-   `/arena set-finish`. These commands require `rune.admin`.
+   `/arena set-finish`. Grant `rune.sprint-arena.set-start` and
+   `rune.sprint-arena.set-finish` to configure these locations.
 3. Players use `/arena join [party]` to queue and `/arena leave` to leave.
    Matching party names keep players together. The default queue starts
    with at least two players.

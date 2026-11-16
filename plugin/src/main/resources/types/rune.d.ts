@@ -141,14 +141,14 @@ interface RuneApi {
      *   rune.command({                                     // object form
      *     name: 'mongo-status',
      *     description: '...',
-     *     permission: 'rune.admin',
+     *     permission: 'example.mongo.status',
      *     args: [{ name: 'count', type: 'int', min: 1 }],
      *     async run(ctx) { ctx.sender.sendMessage(`${ctx.args.count}`); },
      *   });
      *
      *   rune.command('mongo-status')                       // builder form
      *     .description('...')
-     *     .permission('rune.admin')
+     *     .permission('example.mongo.status')
      *     .arg('count', 'int', { min: 1 })
      *     .executes(async (ctx) => { ... })
      *     .register();
@@ -564,6 +564,8 @@ type RuneBook = kyori.adventure.inventory.Book;
 interface RuneAdventure {
     text(value?: string | number | boolean, color?: string): Component;
     miniMessage(template: string, values?: Record<string, RuneMessage | number | boolean>): Component;
+    /** Set the Paper chat renderer. Paper supplies <display_name> and <message> for each message. */
+    formatChat(event: AsyncChatEvent, template: string, values?: Record<string, RuneMessage | number | boolean>): void;
     format(parts: TemplateStringsArray, ...values: (RuneMessage | number | boolean)[]): Component;
     serialize(message: RuneMessage, format?: "plain" | "minimessage" | "legacy" | "json"): string;
     join(parts: readonly RuneMessage[], separator?: RuneMessage): Component;
@@ -920,6 +922,12 @@ declare global {
         | 'entity' | 'entities'
         | 'world' | 'block_pos';
 
+    /** The requesting sender and arguments already parsed before this slot. */
+    interface CommandSuggestionContext {
+        readonly sender: CommandCtx['sender'];
+        readonly args: Readonly<Record<string, unknown>>;
+    }
+
     interface ArgOptions {
         /** Help text shown by Brigadier for this argument. */
         description?: string;
@@ -933,20 +941,14 @@ declare global {
         /** If true, the arg may be omitted (Brigadier branches before it). */
         optional?: boolean;
         /**
-         * Tab-completion suggestions. Three shapes:
-         *   * `string[]` -- fixed list, prefix-filtered by Brigadier
-         *   * `() => string[]` -- snapshot at registration time
-         *   * `(partial: string) => string[]` -- DYNAMIC: called against
-         *     the V8 isolate on every keystroke. Use this for lists that
-         *     mutate at runtime (online players via Brigadier built-ins
-         *     already work; this is for things like group names that the
-         *     script itself owns). The callback runs synchronously --
-         *     keep it cheap (Map lookup, not Mongo query).
+         * A fixed list or a synchronous callback for live Tab completion.
+         * Use context to scope choices to the sender and preceding arguments.
+         * Rune prefix-filters returned items. Use local state for lookups so
+         * the callback can return immediately on the server thread.
          */
         suggest?:
-            | string[]
-            | (() => string[])
-            | ((partial: string) => string[]);
+            | readonly string[]
+            | ((partial: string, context: CommandSuggestionContext) => readonly string[]);
         /**
          * Subcommands that branch AFTER this arg slot. Only consulted
          * when using the imperative `rune.command({tree})` form -- the

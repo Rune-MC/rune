@@ -107,9 +107,11 @@ class TsSurfaceGenerator(private val plugin: JavaPlugin) {
         // Pass 1: flat instance interfaces (existing shape; rune.d.ts merges
         // with these so user-script type annotations like `let p: Player` work).
         for (clazz in classes) {
+            val start = sb.length
             try {
                 emitInterface(sb, clazz, known)
             } catch (e: Throwable) {
+                sb.setLength(start)
                 plugin.logger.fine("ts-gen: skipped interface ${clazz.name}: ${e.message}")
             }
         }
@@ -120,9 +122,11 @@ class TsSurfaceGenerator(private val plugin: JavaPlugin) {
         // each class a constructor + static surface. This is what makes
         //   `new bukkit.inventory.ItemStack(material)`
         // typecheck.
+        val namespaceStart = sb.length
         try {
             emitNamespaceTree(sb, classes, known, ::mapToTsPath)
         } catch (e: Throwable) {
+            sb.setLength(namespaceStart)
             plugin.logger.warning("ts-gen: namespace tree emission failed: ${e.message}")
         }
 
@@ -175,9 +179,11 @@ class TsSurfaceGenerator(private val plugin: JavaPlugin) {
         sb.appendLine("declare global {")
         // Flat instance interfaces (named globally so they merge w/ rune.d.ts).
         for (clazz in classes) {
+            val start = sb.length
             try {
                 emitInterface(sb, clazz, known)
             } catch (e: Throwable) {
+                sb.setLength(start)
                 plugin.logger.fine("ts-gen[$tsAlias]: skipped interface ${clazz.name}: ${e.message}")
             }
         }
@@ -186,9 +192,11 @@ class TsSurfaceGenerator(private val plugin: JavaPlugin) {
             if (fqn.startsWith("$packageRoot.")) "$tsAlias." + fqn.removePrefix("$packageRoot.")
             else null
         }
+        val namespaceStart = sb.length
         try {
             emitNamespaceTree(sb, classes, known, mapper)
         } catch (e: Throwable) {
+            sb.setLength(namespaceStart)
             plugin.logger.warning("ts-gen[$tsAlias]: namespace emission failed: ${e.message}")
         }
         sb.appendLine("}")
@@ -239,9 +247,11 @@ class TsSurfaceGenerator(private val plugin: JavaPlugin) {
         val pad = "    ".repeat(indent)
         sb.append(pad).append("namespace ").append(name).appendLine(" {")
         for ((cname, clazz) in node.classes) {
+            val start = sb.length
             try {
                 emitClassValue(sb, cname, clazz, known, indent + 1)
             } catch (e: Throwable) {
+                sb.setLength(start)
                 plugin.logger.fine("ts-gen: skipped value ${clazz.name}: ${e.message}")
             }
         }

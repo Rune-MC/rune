@@ -52,7 +52,7 @@ the address in case views.
 | --- | --- |
 | `/mod gui` | Search players, issue or revoke cases, review reports, and manage chat. |
 | `/mod ban <player> <duration> <reason>` | Block account login. |
-| `/mod ipban <address> <duration> <reason>` | Block an exact address. |
+| `/mod ipban <player-or-address> <duration> <reason>` | Block an online player's address or an exact IPv4 or quoted IPv6 address. |
 | `/mod mute <player> <duration> <reason>` | Block chat and configured messaging commands. |
 | `/mod freeze <player> <duration> <reason>` | Block movement, teleports, basic interactions, breaking/placing blocks, and direct attacks. |
 | `/mod kick <player> <reason>` | Disconnect an online player and record the case. |
@@ -113,6 +113,17 @@ delay is measured in seconds. Use zero to turn it off. Public chat locks
 leave staff chat available. Join lockdown lets staff and players with
 `rune.moderation.join-bypass` stay on join. Clear-chat pushes the visible
 feed back by sending blank lines and a staff notice.
+
+## Tab completion and chat formatting
+
+On Rune 0.5.2 or later, Tab suggests known players, cases and reports,
+durations, reason presets, and channels you can access. Revoke commands
+suggest active matching penalties.
+
+With `@rune/permissions` installed, edit Global and per-channel layouts
+from `/permissions gui` or `/permissions chat`. New channels become
+available for formatting immediately. Channels keep their existing
+permissions, membership, mutes, and slow mode.
 
 ## Staff permissions
 
