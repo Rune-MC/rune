@@ -1,33 +1,7 @@
-import { createAuth, createAuthHandler } from "@rune/web-auth";
+import { AsyncLocalStorage } from "node:async_hooks";
+import { AuthError, createAuth, createAuthHandler } from "@rune/web-auth";
 import { connections, connectUrl, type RecordStore, type StoredRecord } from "@rune/storage";
-
-const namespace = "rune-dashboard";
-const ownerSlot = namespace + ":owner";
-const accountPrefix = namespace + ":account:";
-type Owner = { lookup: string; value: string };
-const wrap = (lookup: string, entry: StoredRecord): StoredRecord =>
-  ({ ...entry, value: JSON.stringify({ lookup, value: entry.value } satisfies Owner) });
-
-/** Store every Web Auth account insert in one CAS slot. Account creation and ownership commit together. */
-function singleOwner(storage: RecordStore): RecordStore {
-  const account = (key: string) => key.startsWith(accountPrefix);
-  async function get(key: string) {
-    const entry = await storage.get(ownerSlot);
-    if (!entry) return null;
-    const owner: Owner = JSON.parse(entry.value);
-    return owner.lookup === key ? { ...entry, value: owner.value } : null;
-  }
-  return {
-    get: (key) => account(key) ? get(key) : storage.get(key),
-    insert: (key, entry) => account(key) ? storage.insert(ownerSlot, wrap(key, entry)) : storage.insert(key, entry),
-    async replace(key, revision, entry) {
-      if (!account(key)) return storage.replace(key, revision, entry);
-      return (await get(key))?.revision === revision && storage.replace(ownerSlot, revision, wrap(key, entry));
-    },
-    remove: (key, revision) => account(key) ? Promise.resolve(false) : storage.remove(key, revision),
-    prune: (now) => storage.prune(now),
-  };
-}
+import { createUserDirectory, namespace } from "./users.ts";
 
 function localRecords(): RecordStore {
   const storage = rune.store("dashboard-auth");
@@ -86,12 +60,45 @@ export function createDashboardAuth(store: () => RecordStore) {
     remove: (...args) => store().remove(...args),
     prune: (...args) => store().prune(...args),
   };
-  const auth = createAuth({ store: singleOwner(storage), credentials: { mode: "session" }, namespace });
+  const directory = createUserDirectory(storage);
+  const accountKey = (key: string) => key.startsWith(namespace + ":account:");
+  const enrollment = new AsyncLocalStorage<{ kind: "owner" } | { kind: "invite"; code: string }>();
+  const auth = createAuth({
+    credentials: { mode: "session" }, namespace,
+    store: {
+      get: (key) => accountKey(key) ? directory.credential(key) : storage.get(key),
+      async insert(key, row) {
+        if (!accountKey(key)) return storage.insert(key, row);
+        const context = enrollment.getStore();
+        return context?.kind === "owner" ? directory.provisionOwner(key, row) :
+          context?.kind === "invite" ? directory.redeem(key, context.code, row) : false;
+      },
+      replace: (key, revision, row) => accountKey(key)
+        ? directory.replaceCredential(key, revision, row) : storage.replace(key, revision, row),
+      remove: (key, revision) => accountKey(key) ? Promise.resolve(false) : storage.remove(key, revision),
+      prune: storage.prune,
+    },
+  });
   return {
-    hasOwner: async () => (await storage.get(ownerSlot)) !== null,
-    handlers: (origin: string) => createAuthHandler(auth, { origin, allowRegistration: true }),
+    directory,
+    hasOwner: async () => (await directory.owner()) !== null,
+    registerOwner: (login: string, password: string) => enrollment.run({ kind: "owner" }, () => auth.register(login, password)),
+    async registerInvite(login: string, password: string, code: string) {
+      if (!(await directory.validInvitation(login, code))) throw new AuthError("credentials", "Invalid or expired invitation.");
+      return enrollment.run({ kind: "invite", code }, () => auth.register(login, password));
+    },
+    async recoveryCode(login: string) {
+      if (!(await directory.canRecover(login))) return null;
+      return auth.createResetCode(login);
+    },
+    resetPassword: auth.resetPassword,
+    handlers: (origin: string) => createAuthHandler(auth, { origin }),
     prune: auth.pruneExpired,
   };
+}
+
+export function authErrorStatus(error: AuthError) {
+  return { input: 400, credentials: 401, conflict: 409, busy: 429, origin: 403, size: 413 }[error.code];
 }
 
 function header(ctx: ServeContext, name: string) {

@@ -36,12 +36,21 @@ export class AuthError extends Error {
   }
 }
 
-function normalizeLogin(value: unknown): string {
+export function normalizeLogin(value: unknown): string {
   const login = typeof value === "string" ? value.trim().toLowerCase() : "";
   if (!/^[a-z0-9][a-z0-9._+@-]{2,159}$/.test(login)) {
     throw new AuthError("input", "Use a username or email of 3 to 160 ASCII characters.");
   }
   return login;
+}
+
+/** Record key used for an account in a Web Auth storage adapter. */
+export const authAccountKey = (namespace: string, login: string) => `${namespace}:account:${digest(normalizeLogin(login))}`;
+
+/** Server-only. A storage adapter can atomically commit this with an access change. */
+export function revokeAccountSessions(entry: StoredRecord): StoredRecord {
+  const user = JSON.parse(entry.value) as StoredAccount;
+  return record({ ...user, authVersion: randomToken() });
 }
 
 function passwordBytes(value: unknown, newPassword = false): Buffer {
@@ -82,7 +91,7 @@ export function createAuth(options: AuthOptions) {
     throw new TypeError("JWT requires a random key of at least 32 bytes, an issuer, and an audience");
   }
 
-  const accountKey = (login: string) => `${namespace}:account:${digest(login)}`;
+  const accountKey = (login: string) => authAccountKey(namespace, login);
   const grantKey = (id: string) => `${namespace}:grant:${digest(id)}`;
   const resetKey = (id: string) => `${namespace}:reset:${digest(id)}`;
   let passwordJobs = 0;

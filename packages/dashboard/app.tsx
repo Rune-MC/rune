@@ -4,10 +4,11 @@ import * as jsxRuntime from "react/jsx-runtime";
 import { renderToStaticMarkup, renderToString } from "react-dom/server";
 import { createHmac, randomBytes, timingSafeEqual } from "node:crypto";
 import { readFileSync } from "node:fs";
-import type { Account as Owner } from "@rune/web-auth";
+import { AuthError, type Account as WebAccount } from "@rune/web-auth";
 import { Account, Credentials } from "./account.tsx";
-import { InvalidForm, readFields } from "./actions.ts";
-import { authRequest, contentType, createDashboardAuth, loopbackOrigin, selectAuthStorage } from "./auth.ts";
+import { registerAccessRoutes, type PageOptions, type Session, type SignedInHandler } from "./access-routes.tsx";
+import { InvalidForm, readFields, RequestError } from "./actions.ts";
+import { authErrorStatus, authRequest, contentType, createDashboardAuth, loopbackOrigin, selectAuthStorage } from "./auth.ts";
 import { Overview, type OverviewData } from "./overview.tsx";
 import { Activity, Logs, Players, RuneDetails, Runes, Server, Settings, Status, asLink, type Audit } from "./pages.tsx";
 import { ActionForm, Operations, ToolHome, type Contribution } from "./tools.tsx";
@@ -15,6 +16,7 @@ import { Card, Details, Shell, Table } from "./ui.tsx";
 import { avatar } from "./avatars.ts";
 import { PlayerIdentity } from "./identity.tsx";
 import { createPlayerDirectory, findPlayerOptions } from "./players.ts";
+import { canRunAction, toolPermission, type Permission } from "./permissions.ts";
 
 const headers = {
   "Cache-Control": "no-store",
@@ -32,8 +34,8 @@ const onMain = <T,>(fn: () => T) => rune.runOnMain(fn) as Promise<Awaited<T>>;
 const path = (id: string) => asLink("/tools", id);
 const text = (ctx: ServeContext, name: string) => ctx.query(name)?.slice(0, 160) ?? "";
 
-class RequestError extends Error {
-  constructor(readonly status: number, message: string) { super(message); }
+function requirePermission(session: Session, permission: Permission) {
+  if (!session.access.allows(permission)) throw new RequestError(403, "Your role does not grant access to this part of the dashboard.");
 }
 
 export async function startConsole(port: number) {
@@ -53,9 +55,9 @@ export async function startConsole(port: number) {
     try { audit.set("rows", auditRows); } catch (error) { console.warn("Could not persist dashboard activity:", error); }
   }
 
-  function sign(ctx: ServeContext, owner: Owner | null) {
-    const cookie = owner && Object.entries(ctx.req.headers).find(([key]) => key.toLowerCase() === "cookie")?.[1];
-    return createHmac("sha256", secret).update(owner ? owner.id + ":" + (cookie ?? "") : "pre-authentication").digest("hex");
+  function sign(ctx: ServeContext, account: WebAccount | null) {
+    const cookie = account && Object.entries(ctx.req.headers).find(([key]) => key.toLowerCase() === "cookie")?.[1];
+    return createHmac("sha256", secret).update(account ? account.id + ":" + (cookie ?? "") : "pre-authentication").digest("hex");
   }
 
   const reply = (ctx: ServeContext, node: React.ReactNode, code = 200) => ctx.html(html(node), code, headers);
@@ -64,22 +66,28 @@ export async function startConsole(port: number) {
     return ctx.text("", 303, { ...headers, Location: destination, ...(cookie ? { "Set-Cookie": cookie } : {}) });
   };
 
-  function page(ctx: ServeContext, title: string, active: string, children: React.ReactNode, options: { subtitle?: string; interactive?: boolean; status?: number } = {}) {
-    const tools = [...monitor.contributions().values()].flatMap((module) => module.navigation.map(({ page, label }) => ({
-      href: page ? asLink(path(module.id), page) : path(module.id), label,
-    })));
-    return reply(ctx, <Shell title={title} active={active} tools={tools} {...options}>{children}</Shell>, options.status);
+  function visibleTools(session: Session) {
+    return [...monitor.contributions().values()].filter(({ id }) => session.access.allows(toolPermission(id, "view")));
   }
 
-  function pluginContext(ctx: ServeContext, module: Contribution, csrf: string): RuneDashboardPageContext {
+  function page(ctx: ServeContext, session: Session, title: string, active: string, children: React.ReactNode, options: PageOptions = {}) {
+    const tools = visibleTools(session).flatMap((module) => module.navigation.map(({ page, label }) => ({
+      href: page ? asLink(path(module.id), page) : path(module.id), label,
+    })));
+    return reply(ctx, <Shell title={title} active={active} tools={tools} access={session.access} {...options}>{children}</Shell>, options.status);
+  }
+
+  function pluginContext(ctx: ServeContext, module: Contribution, session: Session): RuneDashboardPageContext {
     return {
       query: (key) => ctx.query(key), href: (key) => key ? asLink(path(module.id), key) : path(module.id),
-      action: (id, defaults) => <ActionForm module={module} action={id} defaults={defaults} csrf={csrf} />, onMain,
+      action: (id, defaults) => canRunAction(session.access.allows, module.id, id)
+        ? <ActionForm module={module} action={id} defaults={defaults} csrf={session.csrf} /> : null,
+      onMain,
     };
   }
 
-  async function renderTool(page: RuneDashboardPage, ctx: ServeContext, module: Contribution, csrf: string) {
-    const node = await onMain(() => page.render(pluginContext(ctx, module, csrf)));
+  async function renderTool(page: RuneDashboardPage, ctx: ServeContext, module: Contribution, session: Session) {
+    const node = await onMain(() => page.render(pluginContext(ctx, module, session)));
     const markup = await onMain(() => renderToStaticMarkup(node, { identifierPrefix: module.id + "-" }));
     return <div dangerouslySetInnerHTML={{ __html: markup }} />;
   }
@@ -96,18 +104,21 @@ export async function startConsole(port: number) {
     return values;
   }
 
-  type Session = { owner: Owner; origin: string; csrf: string };
-  const guarded = (handle: (ctx: ServeContext, session: Session) => ServeHandlerResult | Promise<ServeHandlerResult>) =>
+  const guarded = (handle: SignedInHandler, permission?: Permission | ((ctx: ServeContext) => Permission)): ServeHandler =>
     async (ctx: ServeContext) => {
       const origin = loopbackOrigin(ctx);
       if (!origin) return ctx.text("Open Rune Console through its loopback address.", 403, headers);
+      let session: Session | undefined;
       try {
-        const owner = await auth.handlers(origin).authenticate(authRequest(ctx, origin, "/"));
-        if (!owner) return redirect(ctx, await auth.hasOwner() ? "/login" : "/setup");
-        return await handle(ctx, { owner, origin, csrf: sign(ctx, owner) });
+        const account = await auth.handlers(origin).authenticate(authRequest(ctx, origin, "/"));
+        const access = account && await auth.directory.accessFor(account);
+        if (!account || !access) return redirect(ctx, await auth.hasOwner() ? "/login" : "/setup");
+        session = { account, access, origin, csrf: sign(ctx, account) };
+        if (permission) requirePermission(session, typeof permission === "function" ? permission(ctx) : permission);
+        return await handle(ctx, session);
       } catch (error) {
-        if (error instanceof RequestError || error instanceof InvalidForm) {
-          return page(ctx, "Request rejected", "", <Status back="/" failure>{error.message}</Status>,
+        if (session && (error instanceof RequestError || error instanceof InvalidForm)) {
+          return page(ctx, session, "Request rejected", "", <Status back="/" failure>{error.message}</Status>,
             { status: error instanceof RequestError ? error.status : 400 });
         }
         console.error("Dashboard request failed:", error);
@@ -119,8 +130,10 @@ export async function startConsole(port: number) {
     const origin = loopbackOrigin(ctx);
     if (!origin) return ctx.text("Open Rune Console through its loopback address.", 403, headers);
     const csrf = sign(ctx, null);
+    const success = !setup && (ctx.query("joined") === "1" ? "Invitation accepted. Sign in with your new password." :
+      ctx.query("reset") === "1" ? "Password changed. Sign in with your new password." : undefined);
     const view = (error?: string, status = 200) =>
-      reply(ctx, <Credentials csrf={csrf} setup={setup} needsCode={Boolean(setupCode)} error={error} />, status);
+      reply(ctx, <Credentials csrf={csrf} setup={setup} needsCode={Boolean(setupCode)} error={error} notice={success || undefined} />, status);
     try {
       const hasOwner = await auth.hasOwner();
       if (setup && hasOwner || !setup && !hasOwner) return redirect(ctx, hasOwner ? "/login" : "/setup");
@@ -133,10 +146,10 @@ export async function startConsole(port: number) {
       const credentials = { login: values.get("login") ?? "", password: values.get("password") ?? "" };
       const routes = auth.handlers(origin);
       if (setup) {
-        const registered = await routes.handle(authRequest(ctx, origin, "/auth/register", "POST", credentials));
-        if (!registered.ok) {
-          if (registered.status === 409 && await auth.hasOwner()) return redirect(ctx, "/login");
-          return view((await registered.json()).error, registered.status);
+        try { await auth.registerOwner(credentials.login, credentials.password); }
+        catch (error) {
+          if (error instanceof AuthError && error.code === "conflict" && await auth.hasOwner()) return redirect(ctx, "/login");
+          throw error;
         }
         record("Dashboard", "Create owner", "Completed", credentials.login);
       }
@@ -145,19 +158,30 @@ export async function startConsole(port: number) {
       return redirect(ctx, "/", result);
     } catch (error) {
       if (error instanceof RequestError) return view(error.message, error.status);
+      if (error instanceof AuthError) return view(error.message, authErrorStatus(error));
       console.error("Dashboard authentication failed:", error);
       return view("The authentication store is unavailable. Check the server log.", 503);
     }
   };
 
-  const overview = (): OverviewData => ({ snapshot: monitor.snapshot(), samples: monitor.samples() });
+  const overview = (session: Session): OverviewData => {
+    const snapshot = monitor.snapshot();
+    if (!snapshot?.host) return { snapshot, samples: monitor.samples() };
+    const { host } = snapshot;
+    const { allows } = session.access;
+    return { snapshot: { ...snapshot, host: { ...host,
+      players: allows("players:view") ? host.players : [],
+      plugins: allows("server:view") ? host.plugins : [], worlds: allows("server:view") ? host.worlds : [],
+      scripts: allows("runes:view") ? host.scripts : {}, libraries: allows("runes:view") ? host.libraries : [],
+    } }, samples: monitor.samples() };
+  };
   const accountAction = (route: string, operation: string, payload?: (values: URLSearchParams) => Record<string, string>) =>
     guarded(async (ctx, session) => {
       const values = await form(ctx, session.origin, session.csrf);
       const response = await auth.handlers(session.origin)
         .handle(authRequest(ctx, session.origin, "/auth/" + route, "POST", payload?.(values)));
-      if (!response.ok) return page(ctx, "Account", "/account", <Status back="/account" failure>{(await response.json()).error}</Status>, { status: response.status });
-      record("Dashboard", operation, "Completed", session.owner.login);
+      if (!response.ok) return page(ctx, session, "Account", "/account", <Status back="/account" failure>{(await response.json()).error}</Status>, { status: response.status });
+      record("Dashboard", operation, "Completed", session.account.login);
       return redirect(ctx, "/login", response);
     });
 
@@ -170,15 +194,28 @@ export async function startConsole(port: number) {
       app.post("/setup", credentials(true));
       app.get("/login", credentials(false));
       app.post("/login", credentials(false));
-      app.get("/account", guarded((ctx, session) => page(ctx, "Account", "/account", <Account login={session.owner.login} csrf={session.csrf} />)));
+      registerAccessRoutes(app, { auth, form, page, reply, redirect, record,
+        origin: loopbackOrigin, anonymousCsrf: (ctx) => sign(ctx, null), tools: () => monitor.contributions().values(),
+        guardOwner: (handler) => guarded((ctx, session) => {
+          if (!session.access.owner) throw new RequestError(403, "Only the dashboard owner can manage users and roles.");
+          return handler(ctx, session);
+        }),
+      });
+      app.get("/account", guarded((ctx, session) => page(ctx, session, "Account", "/account",
+        <Account login={session.account.login} roles={session.access.roles} csrf={session.csrf} />)));
       app.post("/logout", accountAction("sign-out", "Sign out"));
       app.post("/logout-all", accountAction("sign-out-everywhere", "Revoke all sessions"));
       app.post("/account/password", accountAction("change-password", "Change password", (values) => ({
         oldPassword: values.get("old-password") ?? "", newPassword: values.get("new-password") ?? "",
       })));
 
-      app.get("/api/overview", guarded((ctx) => ctx.json(overview(), 200, headers)));
-      app.get("/api/player-options", guarded(async (ctx) => {
+      app.get("/api/overview", guarded((ctx, session) => ctx.json(overview(session), 200, headers), "overview:view"));
+      app.get("/api/player-options", guarded(async (ctx, session) => {
+        if (!session.access.allows("players:view") && !visibleTools(session).some((module) =>
+          [...module.actions].some(([id, { fields }]) => canRunAction(session.access.allows, module.id, id) &&
+            Object.values(fields).some(({ player }) => player)))) {
+          throw new RequestError(403, "Your role does not grant access to player selection.");
+        }
         const availability = ctx.query("availability") === "online" ? "online" : "known";
         const query = ctx.query("q")?.slice(0, 64) ?? "";
         const selected = ctx.query("selected")?.slice(0, 36) ?? "";
@@ -190,48 +227,49 @@ export async function startConsole(port: number) {
         return { status: 200, headers: { ...headers, "Content-Type": "image/png", ...(maxAge ? { "Cache-Control": `private, max-age=${maxAge}` } : {}) }, body };
       }));
       app.get("/", guarded(async (ctx, session) => {
-        const initial = overview();
+        if (!session.access.allows("overview:view")) return redirect(ctx, "/account");
+        const initial = overview(session);
         const state = JSON.stringify(initial).replaceAll("<", "\\u003c");
-        const panels = await onMain(() => [...monitor.panels()].map(([id, panel]) => {
+        const panels = session.access.owner ? await onMain(() => [...monitor.panels()].map(([id, panel]) => {
           try { return <Card key={id} title={panel.title}><Details values={panel.read()} /></Card>; }
           catch (error) {
             console.warn("Dashboard panel failed:", id, error);
             return <Card key={id} title={panel.title}><p role="alert">Panel unavailable.</p></Card>;
           }
-        }));
-        const widgets = await Promise.all([...monitor.contributions().values()].flatMap((module) => {
+        })) : [];
+        const widgets = await Promise.all(visibleTools(session).flatMap((module) => {
           const widget = module.overview;
           if (!widget) return [];
-          return renderTool(widget, ctx, module, session.csrf)
+          return renderTool(widget, ctx, module, session)
             .then((node) => <Card key={module.id} title={widget.title}>{node}</Card>)
             .catch((error) => {
               console.warn("Rune dashboard widget failed:", module.id, error);
               return <Card key={module.id} title={widget.title}><p role="alert">Widget unavailable.</p></Card>;
             });
         }));
-        return page(ctx, "Overview", "/", <>
+        return page(ctx, session, "Overview", "/", <>
           <div id="overview" dangerouslySetInnerHTML={{ __html: renderToString(<Overview initial={initial} />) }} />
           <script id="overview-state" type="application/json" dangerouslySetInnerHTML={{ __html: state }} />
           {panels.length + widgets.length > 0 && <div className="grid section">{panels}{widgets}</div>}
         </>, { interactive: true, subtitle: initial.snapshot?.host?.server.version });
       }));
-      app.get("/server", guarded((ctx, session) => page(ctx, "Server", "/server",
-        <Server host={monitor.snapshot()?.host} csrf={session.csrf} />)));
-      app.get("/players", guarded((ctx) => page(ctx, "Players", "/players", <Players host={monitor.snapshot()?.host} />)));
-      app.get("/runes", guarded(async (ctx) => page(ctx, "Runes", "/runes", <Runes rows={await monitor.runes()} query={text(ctx, "q")} />)));
-      app.get("/runes/:id", guarded(async (ctx) => {
+      app.get("/server", guarded((ctx, session) => page(ctx, session, "Server", "/server",
+        <Server host={monitor.snapshot()?.host} csrf={session.access.allows("server:reload") ? session.csrf : undefined} />), "server:view"));
+      app.get("/players", guarded((ctx, session) => page(ctx, session, "Players", "/players", <Players host={monitor.snapshot()?.host} />), "players:view"));
+      app.get("/runes", guarded(async (ctx, session) => page(ctx, session, "Runes", "/runes", <Runes rows={await monitor.runes()} query={text(ctx, "q")} />), "runes:view"));
+      app.get("/runes/:id", guarded(async (ctx, session) => {
         const rune = (await monitor.runes()).find((item) => item.id === ctx.param("id"));
         if (!rune) throw new RequestError(404, "Rune unavailable.");
         const script = rune.script?.path;
-        const tools = [...monitor.contributions().values()].filter((module) => script && module.owner === script);
-        const logs = monitor.logs().filter((log) => script && log.rune === script).slice(-30).reverse();
-        return page(ctx, rune.name, "/runes", <RuneDetails item={rune} tools={tools} logs={logs} />);
-      }));
-      app.get("/logs", guarded(async (ctx) => page(ctx, "Logs", "/logs",
-        <Logs rows={monitor.logs()} runes={await monitor.runes()} query={text(ctx, "q")} level={text(ctx, "level")} owner={text(ctx, "rune")} />)));
-      app.get("/settings", guarded((ctx, session) => page(ctx, "Settings", "/settings",
-        <Settings configs={monitor.configs()} csrf={session.csrf} saved={ctx.query("saved") === "1"} />)));
-      app.get("/activity", guarded((ctx) => page(ctx, "Activity", "/activity", <Activity rows={auditRows} />)));
+        const tools = visibleTools(session).filter((module) => script && module.owner === script);
+        const logs = session.access.allows("logs:view") ? monitor.logs().filter((log) => script && log.rune === script).slice(-30).reverse() : undefined;
+        return page(ctx, session, rune.name, "/runes", <RuneDetails item={rune} tools={tools} logs={logs} />);
+      }, "runes:view"));
+      app.get("/logs", guarded(async (ctx, session) => page(ctx, session, "Logs", "/logs",
+        <Logs rows={monitor.logs()} runes={await monitor.runes()} query={text(ctx, "q")} level={text(ctx, "level")} owner={text(ctx, "rune")} />), "logs:view"));
+      app.get("/settings", guarded((ctx, session) => page(ctx, session, "Settings", "/settings",
+        <Settings configs={monitor.configs()} csrf={session.access.allows("settings:edit") ? session.csrf : undefined} saved={ctx.query("saved") === "1"} />), "settings:view"));
+      app.get("/activity", guarded((ctx, session) => page(ctx, session, "Activity", "/activity", <Activity rows={auditRows} />), "activity:view"));
       app.post("/settings/:id", guarded(async (ctx, session) => {
         const values = await form(ctx, session.origin, session.csrf);
         const id = ctx.param("id") ?? "";
@@ -242,18 +280,18 @@ export async function startConsole(port: number) {
         }]));
         try { await onMain(() => config.update(readFields(values, schema))); }
         catch (error) {
-          record(id, "Save settings", "Rejected", session.owner.login);
+          record(id, "Save settings", "Rejected", session.account.login);
           throw new InvalidForm(error instanceof Error ? error.message : "Settings could not be saved.");
         }
-        record(id, "Save settings", "Completed", session.owner.login);
+        record(id, "Save settings", "Completed", session.account.login);
         return redirect(ctx, "/settings?saved=1");
-      }));
+      }, "settings:edit"));
       app.post("/reload", guarded(async (ctx, session) => {
         if ((await form(ctx, session.origin, session.csrf)).get("confirm") !== "yes") throw new InvalidForm("Confirm the reload before continuing.");
-        record("Server", "Reload all Runes", "Queued", session.owner.login);
+        record("Server", "Reload all Runes", "Queued", session.account.login);
         monitor.reload();
-        return page(ctx, "Reload requested", "/server", <Status back="/server">Return after Rune reloads.</Status>, { status: 202 });
-      }));
+        return page(ctx, session, "Reload requested", "/server", <Status back="/server">Return after Rune reloads.</Status>, { status: 202 });
+      }, "server:reload"));
       app.get("/tools/:id", guarded(async (ctx, session) => {
         const module = monitor.contributions().get(ctx.param("id") ?? "");
         if (!module) throw new RequestError(404, "Rune tool unavailable.");
@@ -261,23 +299,26 @@ export async function startConsole(port: number) {
         let metricsFailed = false;
         try { metrics = module.metrics && await onMain(module.metrics); }
         catch (error) { metricsFailed = true; console.warn("Rune tool metrics failed:", module.id, error); }
-        return page(ctx, module.title, path(module.id), <ToolHome module={module} metrics={metrics} metricsFailed={metricsFailed}
-          context={pluginContext(ctx, module, session.csrf)} />,
+        return page(ctx, session, module.title, path(module.id), <ToolHome module={module} metrics={metrics} metricsFailed={metricsFailed}
+          context={pluginContext(ctx, module, session)} />,
           { subtitle: module.description, interactive: true });
-      }));
+      }, (ctx) => toolPermission(ctx.param("id") ?? "", "view")));
       app.get("/tools/:id/:page", guarded(async (ctx, session) => {
         const module = monitor.contributions().get(ctx.param("id") ?? "");
         const pageId = ctx.param("page") ?? "";
         const selected = module?.pages.get(pageId);
         if (!module || !selected) throw new RequestError(404, "Rune tool page unavailable.");
-        const content = await renderTool(selected, ctx, module, session.csrf);
+        const content = await renderTool(selected, ctx, module, session);
         const active = module.navigation.some((link) => link.page === pageId) ? asLink(path(module.id), pageId) : path(module.id);
-        return page(ctx, selected.title, active, <><p><a href={path(module.id)}>{module.title}</a></p>{content}</>, { subtitle: module.description, interactive: true });
-      }));
+        return page(ctx, session, selected.title, active, <><p><a href={path(module.id)}>{module.title}</a></p>{content}</>, { subtitle: module.description, interactive: true });
+      }, (ctx) => toolPermission(ctx.param("id") ?? "", "view")));
       app.post("/tools/:id/actions/:action", guarded(async (ctx, session) => {
+        const moduleId = ctx.param("id") ?? "";
+        const actionId = ctx.param("action") ?? "";
+        if (!canRunAction(session.access.allows, moduleId, actionId)) throw new RequestError(403, "Your role does not grant access to this action.");
         const values = await form(ctx, session.origin, session.csrf);
-        const module = monitor.contributions().get(ctx.param("id") ?? "");
-        const action = module?.actions.get(ctx.param("action") ?? "");
+        const module = monitor.contributions().get(moduleId);
+        const action = module?.actions.get(actionId);
         if (!module || !action) throw new RequestError(404, "Rune action unavailable.");
         const href = path(module.id);
         const referrer = Object.entries(ctx.req.headers).find(([key]) => key.toLowerCase() === "referer")?.[1];
@@ -292,12 +333,12 @@ export async function startConsole(port: number) {
         try {
           if (action.confirm && values.get("confirm") !== "yes") throw new InvalidForm("Confirm this action before continuing.");
           const result = await onMain(() => action.run(readFields(values, action.fields), { onMain }));
-          record(module.title, action.title, "Completed", session.owner.login);
-          return page(ctx, action.title, href, <Status back={back}>{result ?? "Action completed."}</Status>);
+          record(module.title, action.title, "Completed", session.account.login);
+          return page(ctx, session, action.title, href, <Status back={back}>{result ?? "Action completed."}</Status>);
         } catch (error) {
-          record(module.title, action.title, "Rejected", session.owner.login);
+          record(module.title, action.title, "Rejected", session.account.login);
           console.warn("Rune dashboard action failed:", module.id, action.title, error);
-          return page(ctx, action.title, href, <Status back={back} failure>{error instanceof Error ? error.message : "Action failed."}</Status>, { status: 422 });
+          return page(ctx, session, action.title, href, <Status back={back} failure>{error instanceof Error ? error.message : "Action failed."}</Status>, { status: 422 });
         }
       }));
     });

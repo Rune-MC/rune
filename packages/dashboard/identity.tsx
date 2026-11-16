@@ -8,6 +8,7 @@ import { avatarKey, playerName } from "./avatar-url.ts";
 const navigation = new Map<string, LucideIcon>([
   ["/", LayoutDashboard], ["/runes", Boxes], ["/server", Server], ["/players", Users],
   ["/logs", ScrollText], ["/settings", Settings], ["/activity", Activity], ["/account", UserRound],
+  ["/access", KeyRound],
   ["moderation", Shield], ["permissions", KeyRound], ["announcements", Megaphone], ["anticheat", Sword],
   ["homes", House], ["warps", MapPin], ["npcs", Users], ["preferences", SlidersHorizontal],
   ["/tools/moderation/cases", ScrollText], ["/tools/moderation/reports", Flag], ["/tools/moderation/players", Users],

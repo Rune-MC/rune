@@ -1,7 +1,7 @@
 /** @jsxImportSource react */
 import { Card } from "./ui.tsx";
 
-export function Credentials({ csrf, setup, needsCode, error }: { csrf: string; setup: boolean; needsCode: boolean; error?: string }) {
+export function Credentials({ csrf, setup, needsCode, error, notice }: { csrf: string; setup: boolean; needsCode: boolean; error?: string; notice?: string }) {
   return <html lang="en"><head>
     <meta charSet="utf-8" /><meta name="viewport" content="width=device-width,initial-scale=1" />
     <title>{setup ? "Create owner · Rune" : "Sign in · Rune"}</title><link rel="stylesheet" href="/assets/dashboard.css" />
@@ -10,6 +10,7 @@ export function Credentials({ csrf, setup, needsCode, error }: { csrf: string; s
     <Card title={setup ? "Create the dashboard owner" : "Sign in"}>
       {setup && <p>The first account gets full access to this server’s dashboard.</p>}
       {error && <p className="note error" role="alert">{error}</p>}
+      {notice && <p className="note" role="status">{notice}</p>}
       <form method="post" action={setup ? "/setup" : "/login"}>
         <input type="hidden" name="csrf" value={csrf} />
         <label className="field">Username or email<input name="login" autoComplete="username" required minLength={3} maxLength={160} /></label>
@@ -19,13 +20,14 @@ export function Credentials({ csrf, setup, needsCode, error }: { csrf: string; s
         {setup && needsCode && <label className="field">Server setup token<input name="setup-token" type="password" required maxLength={1024} /></label>}
         <p><button className="primary" type="submit">{setup ? "Create owner" : "Sign in"}</button></p>
       </form>
+      {!setup && <p className="auth-links"><a href="/join">Accept invitation</a><a href="/reset">Reset password</a></p>}
     </Card>
   </main></body></html>;
 }
 
-export function Account({ login, csrf }: { login: string; csrf: string }) {
+export function Account({ login, roles, csrf }: { login: string; roles: string[]; csrf: string }) {
   return <div className="form-grid">
-    <Card title="Dashboard owner"><p><strong>{login}</strong> has full dashboard access.</p>
+    <Card title="Your account"><p><strong>{login}</strong></p><p>{roles.join(", ") || "Account access only"}</p>
       <form action="/logout" method="post"><input name="csrf" type="hidden" value={csrf} />
         <button type="submit">Sign out</button></form>
       <form className="section" action="/logout-all" method="post"><input name="csrf" type="hidden" value={csrf} />

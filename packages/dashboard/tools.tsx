@@ -8,16 +8,15 @@ export type Contribution = ReturnType<RuneDashboardMonitor["contributions"]> ext
 
 type Operation = string | { id: string; key?: string; label?: string; defaults?: Record<string, RuneDashboardValue> };
 export function Operations({ context, items, title = "Manage" }: { context: RuneDashboardPageContext; items: Operation[]; title?: string }) {
-  if (!items.length) return null;
-  return <section className="operations"><h2>{title}</h2>
-    {items.map((item) => {
-      const operation = typeof item === "string" ? { id: item } : item;
-      return <details key={operation.key ?? operation.id} className="operation">
-        <summary><ChevronRight size={16} aria-hidden="true" />{operation.label ?? operation.id.replaceAll("-", " ")}</summary>
-        {context.action(operation.id, operation.defaults)}
-      </details>;
-    })}
-  </section>;
+  const available = items.flatMap((item) => {
+    const operation = typeof item === "string" ? { id: item } : item;
+    const form = context.action(operation.id, operation.defaults);
+    return form == null ? [] : [<details key={operation.key ?? operation.id} className="operation">
+      <summary><ChevronRight size={16} aria-hidden="true" />{operation.label ?? operation.id.replaceAll("-", " ")}</summary>
+      {form}
+    </details>];
+  });
+  return available.length ? <section className="operations"><h2>{title}</h2>{available}</section> : null;
 }
 
 export function ActionForm({ module, action, csrf, defaults = {} }: {

@@ -29,6 +29,30 @@ session revocation, and password changes use `@rune/web-auth`.
 
 Stop any previous dashboard launcher before starting this module.
 
+## Add users and assign roles
+
+Sign in as the owner and open **Users & roles**. Create an invitation with a
+username or email and one or more roles. Give the invitee that login and
+the one-time code shown on the confirmation page. They can select
+**Accept invitation** from their dashboard sign-in page and set a password.
+Invitations expire after 24 hours. The owner can renew or cancel them.
+
+- **Viewer** can view monitoring, server details, installed Runes, and players.
+- **Moderator** can view monitoring and players and manage the Moderation tool.
+- **Operator** can monitor the server, read logs and audit activity, change
+  settings, and reload Runes.
+- Custom roles can grant specific dashboard pages, Rune tools, and individual
+  registered actions. A user receives the combined permissions of their roles.
+
+Only the owner can manage users and roles. Select a user to change their
+roles, disable or remove their account, revoke sessions, or generate a
+one-time password recovery code. Recovery codes expire in 15 minutes.
+Dashboard roles control web access. Minecraft permission groups are
+managed separately through the Permissions Rune.
+
+Existing owner accounts keep their login and access when upgrading. Additional
+users and roles are stored alongside the owner in the configured auth store.
+
 ## Monitor the server
 
 - **Overview** tracks TPS, tick time, players, process CPU and resident
@@ -87,7 +111,9 @@ The console supplies its React runtime and exports `Table`, `Details`,
 the server. Use `context.href(page)` for links and
 `context.action(id, defaults)` for authenticated forms.
 Actions declare typed fields and can require confirmation. The console
-validates submitted values and records the outcome in Activity. Use
+checks the current user's permissions before rendering or running an action,
+validates submitted values, and records the outcome in Activity. Keep mutations
+in registered actions. Use
 `context.onMain()` for Paper API calls after awaiting I/O.
 
 Set `player: "known"` on a string action field to show a searchable

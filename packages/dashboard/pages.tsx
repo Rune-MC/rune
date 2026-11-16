@@ -42,7 +42,7 @@ export function Runes({ rows, query }: { rows: RuneEntry[]; query: string }) {
   </>;
 }
 
-export function RuneDetails({ item, tools, logs }: { item: RuneEntry; tools: { id: string; title: string }[]; logs: Log[] }) {
+export function RuneDetails({ item, tools, logs }: { item: RuneEntry; tools: { id: string; title: string }[]; logs?: Log[] }) {
   const { script } = item;
   return <div className="stack">
     <div className="grid"><Card title="Runtime">
@@ -51,18 +51,18 @@ export function RuneDetails({ item, tools, logs }: { item: RuneEntry; tools: { i
         "Load duration": script ? `${number(script.loadMs, 2)} ms` : null,
         "Run since": script ? <Utc value={script.started} /> : null, "Log entries": script?.logCount,
       }} />
-      {script?.lastError && <p className="note error">{script.lastError}</p>}
+      {logs && script?.lastError && <p className="note error">{script.lastError}</p>}
     </Card>{tools.length > 0 && <Card title="Tools"><ul>{tools.map((tool) => <li key={tool.id}><a href={asLink("/tools", tool.id)}>{tool.title}</a></li>)}</ul></Card>}</div>
     <Table title="Rune callbacks" columns={["Callback", "Registered", "Calls", "Errors", "Sync total (ms)", "Sync peak (ms)"]}
       rows={Object.entries(script?.activity ?? {}).map(([kind, row]) => ({ key: kind, cells: [
         kind, row.registered, row.calls, row.errors, number(row.syncMs, 3), number(row.maxMs, 3),
       ] }))} empty={script ? "This Rune has no instrumented callbacks." : "Callback telemetry is available for Runes loaded by the Node runtime."} />
     <p className="muted">Callback timing measures synchronous work. Process CPU and memory are shared by all plugins.</p>
-    <Card title="Recent output"><LogLines rows={ownedLogs(logs, [item])} /></Card>
+    {logs && <Card title="Recent output"><LogLines rows={ownedLogs(logs, [item])} /></Card>}
   </div>;
 }
 
-export function Server({ host, csrf }: { host: RuneDashboardServer | null | undefined; csrf: string }) {
+export function Server({ host, csrf }: { host: RuneDashboardServer | null | undefined; csrf?: string }) {
   return <div className="stack">
     <div className="grid">
       <Card title="Paper server"><Details values={{
@@ -70,14 +70,14 @@ export function Server({ host, csrf }: { host: RuneDashboardServer | null | unde
         "TPS (1 min)": number(host?.server.tps?.[0]), "TPS (5 min)": number(host?.server.tps?.[1]),
         "TPS (15 min)": number(host?.server.tps?.[2]),
       }} /></Card>
-      <Card title="Reload Runes">
+      {csrf && <Card title="Reload Runes">
         <p>Reload scripts and dashboard tools. The dashboard connection will briefly restart.</p>
         <form method="post" action="/reload">
           <input type="hidden" name="csrf" value={csrf} />
           <p><label className="check"><input type="checkbox" name="confirm" value="yes" required />Reload all Runes</label></p>
           <button className="danger" type="submit">Request reload</button>
         </form>
-      </Card>
+      </Card>}
     </div>
     <Table title="Worlds" columns={["World", "Environment", "Players", "Loaded chunks"]}
       rows={(host?.worlds ?? []).map((world) => ({ key: world.name, cells: [world.name, world.environment, world.players, world.chunks] }))}
@@ -126,11 +126,13 @@ export function Logs({ rows, runes, level, query, owner }: { rows: Log[]; runes:
 }
 
 type Config = ReturnType<RuneDashboardMonitor["configs"]> extends Map<string, infer Value> ? Value : never;
-export function Settings({ configs, csrf, saved }: { configs: Map<string, Config>; csrf: string; saved?: boolean }) {
+export function Settings({ configs, csrf, saved }: { configs: Map<string, Config>; csrf?: string; saved?: boolean }) {
   if (!configs.size) return <Card title="Settings"><p className="muted">No Runes have registered settings.</p></Card>;
   return <>{saved && <p className="note" role="status">Settings saved.</p>}
     <div className="form-grid">{[...configs].map(([id, config]) => {
       const values = config.read();
+      if (!csrf) return <Card key={id} title={id}><Details values={Object.fromEntries(Object.entries(config.schema)
+        .map(([name, field]) => [field.label ?? name, values[name]]))} /></Card>;
       return <Card key={id} title={id}><form method="post" action={asLink("/settings", id)}>
         <input type="hidden" name="csrf" value={csrf} />
         {Object.entries(config.schema).map(([name, schema]) => <FormField key={name} name={name}
@@ -143,7 +145,7 @@ export function Settings({ configs, csrf, saved }: { configs: Map<string, Config
 
 export type Audit = { at: number; actor: string; target: string; operation: string; result: "Completed" | "Rejected" | "Queued" };
 export function Activity({ rows }: { rows: Audit[] }) {
-  return <Table title="Management activity" columns={["Time", "Owner", "Target", "Operation", "Result"]}
+  return <Table title="Management activity" columns={["Time", "User", "Target", "Operation", "Result"]}
     rows={rows.slice().reverse().map((row, index) => ({ key: index, cells: [
       <Utc value={row.at} />, row.actor, row.target, row.operation, <Badge tone={row.result === "Rejected" ? "bad" : "good"}>{row.result}</Badge>,
     ] }))} empty="Management actions and settings changes will appear here." />;

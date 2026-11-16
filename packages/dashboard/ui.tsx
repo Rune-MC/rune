@@ -1,6 +1,8 @@
 /** @jsxImportSource react */
 import { useId, type ReactNode } from "react";
 import { NavIcon } from "./identity.tsx";
+import type { Permission } from "./permissions.ts";
+import type { Access } from "./users.ts";
 
 export const number = (value?: number | null, digits = 1) =>
   value != null && Number.isFinite(value) ? new Intl.NumberFormat("en", { maximumFractionDigits: digits }).format(value) : "Unavailable";
@@ -57,13 +59,16 @@ export function Table({ title, columns, rows, empty = "No entries to display." }
   </div>;
 }
 
-export function Shell({ title, subtitle, active, tools, children, interactive }: {
-  title: string; subtitle?: string; active: string; tools: { href: string; label: string }[]; children: ReactNode; interactive?: boolean;
+export function Shell({ title, subtitle, active, tools, children, interactive, access }: {
+  title: string; subtitle?: string; active: string; tools: { href: string; label: string }[]; children: ReactNode; interactive?: boolean; access: Access;
 }) {
-  const navigation = [
-    ["/", "Overview"], ["/runes", "Runes"], ["/server", "Server"], ["/players", "Players"],
-    ["/logs", "Logs"], ["/settings", "Settings"], ["/activity", "Activity"], ["/account", "Account"],
+  const items: [string, string, Permission][] = [
+    ["/", "Overview", "overview:view"], ["/runes", "Runes", "runes:view"], ["/server", "Server", "server:view"], ["/players", "Players", "players:view"],
+    ["/logs", "Logs", "logs:view"], ["/settings", "Settings", "settings:view"], ["/activity", "Activity", "activity:view"],
   ];
+  const navigation = items.filter(([, , permission]) => access.allows(permission)).map(([href, label]) => [href, label]);
+  if (access.owner) navigation.push(["/access", "Users & roles"]);
+  navigation.push(["/account", "Account"]);
   return <html lang="en">
     <head>
       <meta charSet="utf-8" />

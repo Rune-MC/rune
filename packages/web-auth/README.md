@@ -79,6 +79,12 @@ a verified recovery channel. Keep the code out of API responses and logs.
 `resetPassword(code, password)` consumes the code once and revokes prior
 credentials.
 
+Custom account storage adapters can use `normalizeLogin(login)` and
+`authAccountKey(namespace, login)` to match Web Auth's account keys.
+`revokeAccountSessions(record)` prepares a replacement credential record
+with a fresh session version. Commit it with a revision check alongside
+an administrative change such as disabling an account.
+
 The library hashes passwords with scrypt and limits concurrent password work.
 Use an ingress rate limit as well. For multiple instances pass a shared
 `allowAttempt` limiter. Registration, identity verification, authorization

@@ -1,5 +1,5 @@
 name = "@rune/dashboard"
-version = "0.1.3"
+version = "0.1.4"
 language = "typescript"
 entry = "index.ts"
 description = "React operator console with live Paper metrics, Rune telemetry, and extensible dashboard tools."
@@ -12,5 +12,5 @@ include = ["*.ts", "*.tsx", "dashboard.css", "web/*", "rune.toml", "package.json
 required = ["host:bukkit", "host:http"]
 
 [dependencies]
-"@rune/web-auth" = "^0.1.1"
+"@rune/web-auth" = "^0.1.2"
 "@rune/storage" = "^0.1.2"

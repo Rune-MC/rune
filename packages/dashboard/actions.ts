@@ -1,5 +1,9 @@
 export class InvalidForm extends Error {}
 
+export class RequestError extends Error {
+  constructor(readonly status: number, message: string) { super(message); }
+}
+
 export function readFields(form: URLSearchParams, schema: Record<string, RuneDashboardField>) {
   for (const name of new Set(form.keys())) {
     if (form.getAll(name).length !== 1 || !["csrf", "confirm"].includes(name) && !Object.hasOwn(schema, name)) {
