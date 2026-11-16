@@ -38,3 +38,7 @@ an open connection when available. [Storage setup](https://github.com/Rune-MC/ru
 
 With `@rune/dashboard` running on Rune 0.5.3 or newer, this Rune adds
 its own navigation and pages. Browse saved warps and change whether a warp requires permission.
+
+## Dashboard
+
+Open **Warps** in Rune Dashboard to create or move a warp using the position of an online player, change its access, delete it, or teleport a player who can access it. This page requires Rune 0.5.4 or newer and @rune/dashboard 0.1.2 or newer.

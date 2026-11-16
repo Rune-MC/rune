@@ -1,9 +1,23 @@
 /** @jsxImportSource react */
 import { type ReactNode } from "react";
 import { Badge, Card, Details, FormField, number, Table, Utc } from "./ui.tsx";
+import { PlayerIdentity } from "./identity.tsx";
+import { Search } from "lucide-react";
 
 type RuneEntry = Awaited<ReturnType<RuneDashboardMonitor["runes"]>>[number];
 type Log = ReturnType<RuneDashboardMonitor["logs"]>[number];
+
+function ownedLogs(rows: Log[], runes: RuneEntry[]) {
+  const sources = new Map(runes.flatMap((rune) => rune.script ? [[rune.script.path, rune] as const] : []));
+  const folders = new Map(runes.map((rune) => [rune.id.toLowerCase(), rune]));
+  return rows.map((row) => {
+    if (!row.rune) return { ...row, source: "runtime", label: "Rune runtime" };
+    const parts = row.rune.replaceAll("\\", "/").split("/").filter(Boolean);
+    const matched = sources.get(row.rune) ?? folders.get(parts.at(-2)?.toLowerCase() ?? "");
+    const name = parts.at(-1) ?? "Local Rune";
+    return { ...row, source: matched?.id ?? name, label: matched?.name ?? name };
+  });
+}
 
 export const asLink = (root: string, id: string) => root + "/" + encodeURIComponent(id);
 const state = (value: string) => {
@@ -11,19 +25,19 @@ const state = (value: string) => {
   return <Badge tone={status === "loaded" ? "good" : status.startsWith("fail") ? "bad" : "warn"}>{value}</Badge>;
 };
 const sum = (script: RuneDashboardScript | undefined, key: "calls" | "errors" | "registered") =>
-  script && Object.values(script.activity).reduce((total, entry) => total + entry[key], 0);
+  script ? Object.values(script.activity).reduce((total, entry) => total + entry[key], 0) : "—";
 
 export function Runes({ rows, query }: { rows: RuneEntry[]; query: string }) {
   const visible = rows.filter(({ name, id, status }) => [name, id, status].some((value) => value.toLowerCase().includes(query.toLowerCase())));
   return <>
-    <form className="toolbar" method="get" action="/runes">
-      <label>Find a Rune<input type="search" name="q" defaultValue={query} /></label><button type="submit">Search</button>
+    <search><form className="toolbar" method="get" action="/runes">
+      <label>Find a Rune<input type="search" name="q" defaultValue={query} /></label><button type="submit"><Search size={16} aria-hidden="true" />Search</button>
       {query && <a className="button" href="/runes">Clear</a>}
-    </form>
+    </form></search>
     <Table title={`Runes · ${visible.length} of ${rows.length}`} columns={["Rune", "Version", "Status", "Registered", "Calls", "Errors", "Startup (ms)"]}
       rows={visible.map(({ name, id, version, status, script }) => ({ key: id, cells: [
         <a href={asLink("/runes", id)}>{name}</a>, version ?? "Local", state(status), sum(script, "registered"),
-        sum(script, "calls"), sum(script, "errors"), script && number(script.loadMs, 2),
+        sum(script, "calls"), sum(script, "errors"), script ? number(script.loadMs, 2) : "—",
       ] }))} empty={query ? "No Runes match this search." : "No installed or loaded Runes were reported."} />
   </>;
 }
@@ -44,7 +58,7 @@ export function RuneDetails({ item, tools, logs }: { item: RuneEntry; tools: { i
         kind, row.registered, row.calls, row.errors, number(row.syncMs, 3), number(row.maxMs, 3),
       ] }))} empty={script ? "This Rune has no instrumented callbacks." : "Callback telemetry is available for Runes loaded by the Node runtime."} />
     <p className="muted">Callback timing measures synchronous work. Process CPU and memory are shared by all plugins.</p>
-    <Card title="Recent output"><LogLines rows={logs} /></Card>
+    <Card title="Recent output"><LogLines rows={ownedLogs(logs, [item])} /></Card>
   </div>;
 }
 
@@ -80,32 +94,35 @@ export function Server({ host, csrf }: { host: RuneDashboardServer | null | unde
 export function Players({ host }: { host: RuneDashboardServer | null | undefined }) {
   return <Table title={`Players online · ${host ? `${host.server.online}/${host.server.capacity}` : "Waiting for the server"}`}
     columns={["Player", "World", "Game mode", "Ping (ms)"]}
-    rows={(host?.players ?? []).map((player) => ({ key: player.name, cells: [player.name, player.world, player.mode, player.ping] }))}
+    rows={(host?.players ?? []).map((player) => ({ key: player.name, cells: [
+      <PlayerIdentity name={player.name} id={player.id} />, player.world, player.mode, player.ping,
+    ] }))}
     empty={host ? "No players are connected." : "Player statistics are unavailable."} />;
 }
 
-function LogLines({ rows }: { rows: Log[] }) {
+function LogLines({ rows }: { rows: ReturnType<typeof ownedLogs> }) {
   if (!rows.length) return <p className="muted">No matching Rune logs.</p>;
   return <ol className="log-lines">{rows.map((row) => <li key={row.id}>
     <Utc value={row.at} /><Badge tone={row.level === "error" ? "bad" : row.level === "warn" ? "warn" : ""}>{row.level}</Badge>
-    <div>{row.rune && <small>{row.rune}</small>}<pre>{row.text}</pre></div>
+    <div><small>{row.label}</small><pre>{row.text}</pre></div>
   </li>)}</ol>;
 }
 
-export function Logs({ rows, level, query, owner }: { rows: Log[]; level: string; query: string; owner: string }) {
-  const owners = [...new Set(rows.flatMap((row) => row.rune ? [row.rune] : []))].sort();
-  const filtered = rows.filter((row) => (!level || row.level === level) && (!owner || row.rune === owner) &&
+export function Logs({ rows, runes, level, query, owner }: { rows: Log[]; runes: RuneEntry[]; level: string; query: string; owner: string }) {
+  const labeled = ownedLogs(rows, runes);
+  const owners = [...new Map(labeled.map(({ source, label }) => [source, label])).entries()].sort((a, b) => a[1].localeCompare(b[1]));
+  const filtered = labeled.filter((row) => (!level || row.level === level) && (!owner || row.source === owner || row.rune === owner) &&
     (!query || row.text.toLowerCase().includes(query.toLowerCase()))).reverse();
-  return <><form className="toolbar" action="/logs" method="get">
+  return <><search><form className="toolbar" action="/logs" method="get">
     <label>Search output<input type="search" name="q" defaultValue={query} /></label>
     <label>Level<select name="level" defaultValue={level}><option value="">All levels</option>
       {["error", "warn", "info", "log", "debug"].map((item) => <option key={item}>{item}</option>)}
     </select></label>
     <label>Rune<select name="rune" defaultValue={owner}><option value="">All Runes</option>
-      {owners.map((item) => <option key={item}>{item}</option>)}
+      {owners.map(([id, label]) => <option key={id} value={id}>{label}</option>)}
     </select></label>
     <button type="submit">Apply</button><a href="/logs" className="button">Clear</a>
-  </form><LogLines rows={filtered} /></>;
+  </form></search><LogLines rows={filtered} /></>;
 }
 
 type Config = ReturnType<RuneDashboardMonitor["configs"]> extends Map<string, infer Value> ? Value : never;

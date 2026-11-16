@@ -6,7 +6,7 @@ pages they contribute to the console.
 
 ## Install
 
-Install Rune 0.5.3 or newer. Run `rune add @rune/dashboard` from the Paper
+Install Rune 0.5.4 or newer. Run `rune add @rune/dashboard` from the Paper
 server folder and restart Paper. Open `http://127.0.0.1:8777` on the
 server. For a remote Minecraft server, forward the port over SSH.
 
@@ -35,13 +35,31 @@ Stop any previous dashboard launcher before starting this module.
   memory, JVM heap and GC, and the Node runtime. Charts show up to fifteen
   minutes of history.
 - **Runes** shows versions, startup status and time, logs, and counts and
-  synchronous timing for Node callbacks.
+  synchronous timing for Node callbacks. Libraries have no standalone
+  startup or callback totals.
 - **Server** lists Bukkit plugins with listener counts and pending Bukkit
   tasks where available, plus worlds and loaded chunks. It also supports a
   confirmed Rune reload.
 - **Players**, **Logs**, **Settings**, **Activity**, and **Account** expose
   live presence, recent Rune output, registered config, web changes, and
   authentication controls.
+
+Player lists show Minecraft heads fetched by the dashboard from Minotar.
+The request contains the player's UUID or Minecraft username. The
+dashboard caches the image and shows a generic icon when it can't load.
+
+## Manage official Runes
+
+- **Permissions** edits groups, inheritance, scoped grants and rules,
+  prefixes, suffixes, primary groups, promotion tracks, and per-channel
+  chat formats. It can explain effective permissions for a player.
+- **Moderation** issues and revokes punishments, reviews reports, manages
+  channels, and controls slow mode, chat locks, and join lockdown.
+- **Announcements** creates, edits, deletes, sends, and rotates messages.
+- **Homes**, **Warps**, and **NPCs** manage saved destinations, entities,
+  and NPC dialogue. Position-based actions use a selected online player.
+- **Preferences** manages individual player settings. **Anticheat** shows
+  detection alerts and edits monitoring thresholds.
 
 CPU and memory are measured for the shared server process. Rune callback
 timing measures synchronous execution in the Node runtime. Samples and
@@ -64,8 +82,8 @@ page and override its label. Omit `navigation` for one link to the tool's
 landing page. Set `overview` to add a React widget to the overview.
 
 Write contributed pages as `.tsx` with `/** @jsxImportSource rune:dashboard */`.
-The console supplies its React runtime and exports shared `Table`,
-`Details`, and `Card` components from `rune:dashboard`. Pages render on
+The console supplies its React runtime and exports `Table`, `Details`,
+`Card`, `Operations`, and `PlayerIdentity` from `rune:dashboard`. Pages render on
 the server. Use `context.href(page)` for links and
 `context.action(id, defaults)` for authenticated forms.
 Actions declare typed fields and can require confirmation. The console

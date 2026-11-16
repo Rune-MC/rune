@@ -10,4 +10,7 @@ import { startPaper } from "./paper.ts";
 
 startPaper();
 startChat();
-rune.dashboard?.whenInstalled?.(async () => (await import("./dashboard.tsx")).registerDashboard());
+rune.dashboard?.whenInstalled?.(async () => {
+  if (!(rune.dashboard.apiVersion >= 2)) return;
+  return (await import("./dashboard.tsx")).registerDashboard();
+});

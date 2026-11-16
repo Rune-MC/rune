@@ -43,3 +43,7 @@ an open connection when available. [Storage setup](https://github.com/Rune-MC/ru
 
 With `@rune/dashboard` running on Rune 0.5.3 or newer, this Rune adds
 its own navigation and pages. Search saved homes by name, world, or owner.
+
+## Dashboard
+
+Open **Homes** in Rune Dashboard to search saved homes, place one at the position of an online player, remove a home, or teleport its online owner to it. This page requires Rune 0.5.4 or newer and @rune/dashboard 0.1.2 or newer.

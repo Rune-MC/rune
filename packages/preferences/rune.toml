@@ -1,5 +1,5 @@
 name = "@rune/preferences"
-version = "0.1.3"
+version = "0.1.4"
 language = "typescript"
 entry = "index.ts"
 description = "Persistent per-player toggle settings with a service for other Runes."

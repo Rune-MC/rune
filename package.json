@@ -1,6 +1,6 @@
 {
   "name": "rune-monorepo",
-  "version": "0.5.3",
+  "version": "0.5.4",
   "description": "Polyglot scripting platform for Paper Minecraft servers. Monorepo root.",
   "private": true,
   "packageManager": "pnpm@9.12.0",

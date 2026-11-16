@@ -50,10 +50,11 @@ object DashboardHost {
                     "players" to world.players.size, "chunks" to world.loadedChunks.size)
             },
             "players" to server.onlinePlayers.sortedBy { it.name.lowercase() }.map { player ->
-                mapOf("name" to player.name, "world" to player.world.name,
+                mapOf("name" to player.name, "id" to player.uniqueId.toString(), "world" to player.world.name,
                     "mode" to player.gameMode.name, "ping" to player.ping)
             },
             "scripts" to rune?.dashboardScripts().orEmpty(),
+            "libraries" to rune?.dashboardLibraries().orEmpty(),
         )
     }
 }

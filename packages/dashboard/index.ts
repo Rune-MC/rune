@@ -1,6 +1,6 @@
 import { startConsole } from "./app.tsx";
 
-if (typeof rune.dashboard.monitor !== "function") throw new Error("Rune Dashboard requires Rune 0.5.3 or later.");
+if ((rune.dashboard?.apiVersion ?? 0) < 2) throw new Error("Rune Dashboard requires Rune 0.5.4 or later.");
 const port = Number(process.env.RUNE_DASHBOARD_PORT ?? 8777);
 if (!Number.isInteger(port) || port < 1 || port > 65535) throw new Error("Set RUNE_DASHBOARD_PORT to a valid TCP port.");
 await startConsole(port);

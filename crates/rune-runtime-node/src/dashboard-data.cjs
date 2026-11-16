@@ -67,12 +67,21 @@ function createDashboardData(rune, telemetry) {
   async function runes() {
     const packages = await installed();
     const native = latest?.host?.scripts ?? {};
-    const owned = new Map([...telemetry.scripts.values()].map((script) => [script.folder, script]));
-    return [...new Set([...packages.keys(), ...Object.keys(native), ...owned.keys()])].sort().map((id) => {
+    const key = (id) => process.platform === 'win32' ? id.toLowerCase() : id;
+    const scripts = new Map(Object.entries(native).map(([id, status]) => [key(id), status]));
+    const libraryIds = latest?.host?.libraries ?? [];
+    const libraries = new Set(libraryIds.map(key));
+    const owned = new Map([...telemetry.scripts.values()].map((script) => [key(script.folder), script]));
+    const ids = new Map();
+    for (const id of [...packages.keys(), ...Object.keys(native), ...libraryIds, ...[...owned.values()].map((script) => script.folder)]) {
+      if (id && !ids.has(key(id))) ids.set(key(id), id);
+    }
+    return [...ids].map(([normalized, id]) => {
       const { name = id, version } = packages.get(id) ?? {};
-      const script = owned.get(id);
-      return { id, name, version, script, status: script?.status ?? native[id] ?? 'Installed' };
-    });
+      const script = owned.get(normalized);
+      return { id, name, version, script,
+        status: script?.status ?? scripts.get(normalized) ?? (libraries.has(normalized) ? 'Library' : 'Installed') };
+    }).sort((a, b) => a.name.localeCompare(b.name));
   }
 
   return { samples, runes, collect, current: () => latest };

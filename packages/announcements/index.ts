@@ -19,14 +19,37 @@ function send(message: string) {
   }
 }
 
-rune.dashboard?.whenInstalled?.(async () => (await import("./dashboard.tsx")).registerDashboard(
-  messages.value, config.read, (name) => {
-    const data = messages.value();
-    if (!Object.hasOwn(data, name)) throw new Error("Announcement not found.");
-    send(data[name]);
-    lastSent = Date.now();
-  },
-));
+function deliver(name: string) {
+  const data = messages.value();
+  if (!Object.hasOwn(data, name)) throw new StorageInputError("Announcement not found.");
+  send(data[name]);
+  lastSent = Date.now();
+}
+
+function change(input: string, message?: string) {
+  const name = input.toLowerCase();
+  if (!/^[a-z0-9-]{1,32}$/.test(name)) throw new StorageInputError("Use 1–32 letters, numbers, or hyphens.");
+  const content = message?.trim();
+  if (content !== undefined) {
+    if (!content || content.length > 400) throw new StorageInputError("Use a message of 1–400 characters.");
+    try { rune.adventure.miniMessage(content); }
+    catch { throw new StorageInputError("Invalid MiniMessage."); }
+  }
+  return (data: Record<string, string>) => {
+    if (content !== undefined) data[name] = content;
+    else {
+      if (!Object.hasOwn(data, name)) throw new StorageInputError("Announcement not found.");
+      delete data[name];
+    }
+  };
+}
+
+rune.dashboard?.whenInstalled?.(async () => {
+  if (!(rune.dashboard.apiVersion >= 2)) return;
+  return (await import("./dashboard.tsx")).registerDashboard(messages.value, config,
+    (name) => deliver(name.toLowerCase()),
+    async (name, text) => new Promise<void>((resolve, reject) => messages.edit(change(name, text), resolve, (error) => reject(new Error(error)))));
+});
 
 rune.schedule.everyTicks(() => {
   const opts = config.read();
@@ -71,13 +94,10 @@ export class SetAnnouncement {
   @Arg("message", { type: "greedy" }) message!: string;
   @Run run(ctx: CommandCtx) {
       const name = id(ctx, this.id);
-      const message = this.message.trim();
       if (!name) return;
-      if (!message || message.length > 400) { ctx.sender.sendMessage("Use a message of 1–400 characters."); return; }
-      try { rune.adventure.miniMessage(message); }
-      catch { ctx.sender.sendMessage("Invalid MiniMessage."); return; }
-      messages.edit((data) => { data[name] = message; },
-        () => ctx.sender.sendMessage(`Saved announcement ${name}.`), (error) => ctx.sender.sendMessage(error));
+      try {
+        messages.edit(change(name, this.message), () => ctx.sender.sendMessage(`Saved announcement ${name}.`), (error) => ctx.sender.sendMessage(error));
+      } catch (error) { ctx.sender.sendMessage((error as Error).message); }
   }
 }
 
@@ -87,11 +107,8 @@ export class SendAnnouncement {
   @Run run(ctx: CommandCtx) {
       const name = id(ctx, this.id);
       if (!name) return;
-      const data = messages.value();
-      const message = Object.hasOwn(data, name) ? data[name] : undefined;
-      if (!message) { ctx.sender.sendMessage("Announcement not found."); return; }
-      send(message);
-      lastSent = Date.now();
+      try { deliver(name); }
+      catch (error) { ctx.sender.sendMessage((error as Error).message); }
   }
 }
 
@@ -101,9 +118,6 @@ export class DeleteAnnouncement {
   @Run run(ctx: CommandCtx) {
       const name = id(ctx, this.id);
       if (!name) return;
-      messages.edit((data) => {
-        if (!Object.hasOwn(data, name)) throw new StorageInputError("Announcement not found.");
-        delete data[name];
-      }, () => ctx.sender.sendMessage(`Deleted announcement ${name}.`), (error) => ctx.sender.sendMessage(error));
+      messages.edit(change(name), () => ctx.sender.sendMessage(`Deleted announcement ${name}.`), (error) => ctx.sender.sendMessage(error));
   }
 }

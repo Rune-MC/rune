@@ -1,5 +1,6 @@
 /** @jsxImportSource react */
 import { useId, type ReactNode } from "react";
+import { NavIcon } from "./identity.tsx";
 
 export const number = (value?: number | null, digits = 1) =>
   value != null && Number.isFinite(value) ? new Intl.NumberFormat("en", { maximumFractionDigits: digits }).format(value) : "Unavailable";
@@ -78,10 +79,10 @@ export function Shell({ title, subtitle, active, tools, children, live }: {
           <a className="brand" href="/"><span className="brand-mark" aria-hidden="true" />Rune Console</a>
           <nav aria-label="Console">
             <div className="nav-section"><h2>Server</h2>
-              {navigation.map(([href, label]) => <a key={href} href={href} aria-current={active === href ? "page" : undefined}>{label}</a>)}
+              {navigation.map(([href, label]) => <a key={href} href={href} aria-current={active === href ? "page" : undefined}><NavIcon path={href} />{label}</a>)}
             </div>
             {tools.length > 0 && <div className="nav-section"><h2>Rune tools</h2>
-              {tools.map(({ href, label }) => <a key={href} href={href} aria-current={active === href ? "page" : undefined}>{label}</a>)}
+              {tools.map(({ href, label }) => <a key={href} href={href} aria-current={active === href ? "page" : undefined}><NavIcon path={href} />{label}</a>)}
             </div>}
           </nav>
         </aside>

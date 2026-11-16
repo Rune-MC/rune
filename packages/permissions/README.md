@@ -202,3 +202,7 @@ Permissions Rune.
 
 With `@rune/dashboard` running on Rune 0.5.3 or newer, this Rune adds
 its own navigation and pages. View groups and chat layouts, edit weights, and update formats.
+
+## Dashboard
+
+Open **Permissions** in Rune Dashboard to manage groups, rules, grants, player labels, promotion tracks, and channel chat formats. The player profile page checks effective access by world and server. The chat page can preview a template and the tool links to the permissions audit. This page requires Rune 0.5.4 or newer and @rune/dashboard 0.1.2 or newer.

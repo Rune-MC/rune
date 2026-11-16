@@ -26,6 +26,8 @@ class RunePlugin : JavaPlugin() {
     private val scriptStatuses = linkedMapOf<String, String>()
 
     internal fun dashboardScripts(): Map<String, String> = scriptStatuses.toMap()
+    internal fun dashboardLibraries(): List<String> =
+        libraryDecls.filter { it.isLibrary }.map { it.folder.fileName.toString() }
     /**
      * Per-folder library declarations from rune.jsonc. Drives:
      *   * `loadAllScripts` skips folders flagged `library: true`

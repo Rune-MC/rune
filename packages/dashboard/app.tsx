@@ -10,8 +10,10 @@ import { InvalidForm, readFields } from "./actions.ts";
 import { authRequest, contentType, createDashboardAuth, loopbackOrigin, selectAuthStorage } from "./auth.ts";
 import { Overview, type OverviewData } from "./overview.tsx";
 import { Activity, Logs, Players, RuneDetails, Runes, Server, Settings, Status, asLink, type Audit } from "./pages.tsx";
-import { ActionForm, ToolHome, type Contribution } from "./tools.tsx";
+import { ActionForm, Operations, ToolHome, type Contribution } from "./tools.tsx";
 import { Card, Details, Shell, Table } from "./ui.tsx";
+import { avatar } from "./avatars.ts";
+import { PlayerIdentity } from "./identity.tsx";
 
 const headers = {
   "Cache-Control": "no-store",
@@ -41,7 +43,7 @@ export async function startConsole(port: number) {
   const setupCode = process.env.RUNE_DASHBOARD_SETUP_TOKEN ?? process.env.RUNE_DASHBOARD_TOKEN;
   const secret = randomBytes(32);
   const audit = rune.store("dashboard-activity");
-  const monitor = rune.dashboard.monitor({ ...jsxRuntime, react: React, components: { Card, Details, Table } });
+  const monitor = rune.dashboard.monitor({ ...jsxRuntime, react: React, components: { Card, Details, Table, Operations, PlayerIdentity } });
   let auditRows = audit.get<Audit[]>("rows") ?? [];
 
   function record(target: string, operation: string, result: Audit["result"], actor: string) {
@@ -174,6 +176,10 @@ export async function startConsole(port: number) {
       })));
 
       app.get("/api/overview", guarded((ctx) => ctx.json(overview(), 200, headers)));
+      app.get("/avatars/:id", guarded(async (ctx) => ({
+        status: 200, headers: { ...headers, "Content-Type": "image/png", "Cache-Control": "private, max-age=300" },
+        body: await avatar(ctx.param("id") ?? ""),
+      })));
       app.get("/", guarded(async (ctx, session) => {
         const initial = overview();
         const state = JSON.stringify(initial).replaceAll("<", "\\u003c");
@@ -212,8 +218,8 @@ export async function startConsole(port: number) {
         const logs = monitor.logs().filter((log) => script && log.rune === script).slice(-30).reverse();
         return page(ctx, rune.name, "/runes", <RuneDetails item={rune} tools={tools} logs={logs} />);
       }));
-      app.get("/logs", guarded((ctx) => page(ctx, "Logs", "/logs",
-        <Logs rows={monitor.logs()} query={text(ctx, "q")} level={text(ctx, "level")} owner={text(ctx, "rune")} />)));
+      app.get("/logs", guarded(async (ctx) => page(ctx, "Logs", "/logs",
+        <Logs rows={monitor.logs()} runes={await monitor.runes()} query={text(ctx, "q")} level={text(ctx, "level")} owner={text(ctx, "rune")} />)));
       app.get("/settings", guarded((ctx, session) => page(ctx, "Settings", "/settings",
         <Settings configs={monitor.configs()} csrf={session.csrf} saved={ctx.query("saved") === "1"} />)));
       app.get("/activity", guarded((ctx) => page(ctx, "Activity", "/activity", <Activity rows={auditRows} />)));
@@ -246,7 +252,8 @@ export async function startConsole(port: number) {
         let metricsFailed = false;
         try { metrics = module.metrics && await onMain(module.metrics); }
         catch (error) { metricsFailed = true; console.warn("Rune tool metrics failed:", module.id, error); }
-        return page(ctx, module.title, path(module.id), <ToolHome module={module} metrics={metrics} metricsFailed={metricsFailed} csrf={session.csrf} />,
+        return page(ctx, module.title, path(module.id), <ToolHome module={module} metrics={metrics} metricsFailed={metricsFailed}
+          context={pluginContext(ctx, module, session.csrf)} />,
           { subtitle: module.description });
       }));
       app.get("/tools/:id/:page", guarded(async (ctx, session) => {
@@ -264,15 +271,24 @@ export async function startConsole(port: number) {
         const action = module?.actions.get(ctx.param("action") ?? "");
         if (!module || !action) throw new RequestError(404, "Rune action unavailable.");
         const href = path(module.id);
+        const referrer = Object.entries(ctx.req.headers).find(([key]) => key.toLowerCase() === "referer")?.[1];
+        let back = href;
+        if (referrer) {
+          try {
+            const url = new URL(referrer);
+            const pages = [href, ...[...module.pages.keys()].map((id) => asLink(href, id))];
+            if (url.origin === session.origin && pages.includes(url.pathname)) back = url.pathname + url.search;
+          } catch { /* Fall back to the tool home for malformed referrers. */ }
+        }
         try {
           if (action.confirm && values.get("confirm") !== "yes") throw new InvalidForm("Confirm this action before continuing.");
           const result = await onMain(() => action.run(readFields(values, action.fields), { onMain }));
           record(module.title, action.title, "Completed", session.owner.login);
-          return page(ctx, action.title, href, <Status back={href}>{result ?? "Action completed."}</Status>);
+          return page(ctx, action.title, href, <Status back={back}>{result ?? "Action completed."}</Status>);
         } catch (error) {
           record(module.title, action.title, "Rejected", session.owner.login);
           console.warn("Rune dashboard action failed:", module.id, action.title, error);
-          return page(ctx, action.title, href, <Status back={href} failure>{error instanceof Error ? error.message : "Action failed."}</Status>, { status: 422 });
+          return page(ctx, action.title, href, <Status back={back} failure>{error instanceof Error ? error.message : "Action failed."}</Status>, { status: 422 });
         }
       }));
     });

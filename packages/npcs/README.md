@@ -55,3 +55,7 @@ an open connection when available. [Storage setup](https://github.com/Rune-MC/ru
 
 With `@rune/dashboard` running on Rune 0.5.3 or newer, this Rune adds
 its own navigation and pages. Browse NPCs and edit their dialogue.
+
+## Dashboard
+
+Open **NPCs** in Rune Dashboard to create, move, remove, rename, or edit the dialogue of an NPC. Placement uses the position of an online player. This page requires Rune 0.5.4 or newer and @rune/dashboard 0.1.2 or newer.

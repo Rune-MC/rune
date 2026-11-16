@@ -3,11 +3,11 @@ import { paperRecords, StorageInputError } from "@rune/storage";
 
 interface Npc { id: string; title: string; line: string; at: Position }
 const registry = paperRecords<Npc>(rune, "npcs", "rune-npcs");
-rune.dashboard?.whenInstalled?.(async () => (await import("./dashboard.tsx")).registerDashboard(registry.value, (id, line) =>
-  new Promise<void>((resolve, reject) => registry.edit((data) => {
-    find(data, id).line = line;
-  }, resolve, (message) => reject(new Error(message)))),
-));
+rune.dashboard?.whenInstalled?.(async () => {
+  if (!(rune.dashboard.apiVersion >= 2)) return;
+  return (await import("./dashboard.tsx")).registerDashboard(registry.value,
+    (change) => new Promise<void>((resolve, reject) => registry.edit(change, resolve, (message) => reject(new Error(message)))));
+});
 const tagPrefix = "rune-npc:";
 
 const repeat = new Map<string, number>();

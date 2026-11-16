@@ -100,6 +100,8 @@ export async function load(url, context, nextLoad) {
       export const Table = (props) => createElement(components().Table, props);
       export const Details = (props) => createElement(components().Details, props);
       export const Card = (props) => createElement(components().Card, props);
+      export const PlayerIdentity = (props) => createElement(components().PlayerIdentity, props);
+      export const Operations = (props) => createElement(components().Operations, props);
     `;
     return { format: 'module', source, shortCircuit: true };
   }

@@ -1,11 +1,27 @@
+// Rust canonicalizes package entry points on Windows, which returns verbatim paths.
+function runeScriptIdentity(file, root, path) {
+  const ordinary = (value) => value
+    .replace(/^\\\\\?\\UNC\\/i, '\\\\')
+    .replace(/^\\\\\?\\(?=[a-z]:[\\/])/i, '');
+  const entry = ordinary(file);
+  const relative = path.relative(ordinary(root), entry);
+  const name = !relative || path.isAbsolute(relative) || relative === '..' || relative.startsWith('..' + path.sep)
+    ? path.basename(entry)
+    : relative.replaceAll(path.sep, '/');
+  return { path: name, folder: name.split('/')[0] };
+}
+
 const createRuneTelemetry = () => {
   const { AsyncLocalStorage } = require('node:async_hooks');
-  const { relative } = require('node:path');
+  const path = require('node:path');
+  const { realpathSync } = require('node:fs');
   const { performance } = require('node:perf_hooks');
   const owners = new AsyncLocalStorage();
   const scripts = new Map();
   const logs = [];
   let sequence = 0;
+  let root = process.cwd();
+  try { root = realpathSync.native(root); } catch { /* The original cwd is still usable. */ }
 
   function track(kind, fn) {
     const owner = owners.getStore();
@@ -58,12 +74,11 @@ const createRuneTelemetry = () => {
       const owner = owners.getStore();
       if (owner?.status === 'loading') owner.cleanup.push(dispose);
     },
-    async load(path, execute) {
-      const name = relative(process.cwd(), path).replaceAll('\\', '/');
-      const folder = name.split('/')[0];
-      const owner = { path: name, folder, status: 'loading', started: Date.now(), loadMs: 0,
+    async load(file, execute) {
+      const identity = runeScriptIdentity(file, root, path);
+      const owner = { ...identity, status: 'loading', started: Date.now(), loadMs: 0,
         activity: Object.create(null), logCount: 0, lastError: null, cleanup: [] };
-      scripts.set(name, owner);
+      scripts.set(owner.path, owner);
       const start = performance.now();
       try {
         const result = await owners.run(owner, execute);

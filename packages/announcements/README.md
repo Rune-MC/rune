@@ -49,3 +49,7 @@ an open connection when available. [Storage setup](https://github.com/Rune-MC/ru
 
 With `@rune/dashboard` running on Rune 0.5.3 or newer, this Rune adds
 its own navigation and pages. Browse saved announcements and send one immediately.
+
+## Dashboard
+
+Open **Announcements** in Rune Dashboard to create, update, delete, or send messages and configure automatic rotation. This page requires Rune 0.5.4 or newer and @rune/dashboard 0.1.2 or newer.

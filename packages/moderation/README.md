@@ -167,3 +167,7 @@ committed updates for integrations.
 
 With `@rune/dashboard` running on Rune 0.5.3 or newer, this Rune adds
 its own navigation and pages. Inspect recent cases and resolve player reports.
+
+## Dashboard
+
+Open **Moderation** in Rune Dashboard to review player histories, issue or revoke punishments, claim and resolve reports, and manage channels, slow mode, chat locks, and join lockdown. The tool also links to the moderation audit. This page requires Rune 0.5.4 or newer and @rune/dashboard 0.1.2 or newer.

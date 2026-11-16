@@ -3,12 +3,11 @@ import { paperRecords, StorageInputError } from "@rune/storage";
 
 interface Warp { point: Position; restricted: boolean }
 const warps = paperRecords<Warp>(rune, "warps", "rune-warps");
-rune.dashboard?.whenInstalled?.(async () => (await import("./dashboard.tsx")).registerDashboard(warps.value, (name, restricted) =>
-  new Promise<void>((resolve, reject) => warps.edit((data) => {
-    if (!Object.hasOwn(data, name)) throw new StorageInputError("Warp not found.");
-    data[name] = { ...data[name], restricted };
-  }, resolve, (message) => reject(new Error(message)))),
-));
+rune.dashboard?.whenInstalled?.(async () => {
+  if (!(rune.dashboard.apiVersion >= 2)) return;
+  return (await import("./dashboard.tsx")).registerDashboard(warps.value,
+    (change) => new Promise<void>((resolve, reject) => warps.edit(change, resolve, (message) => reject(new Error(message)))), canVisit);
+});
 const canVisit = (sender: CommandSender, name: string, warp: Warp) =>
   !warp.restricted || sender.isOp() || sender.hasPermission("rune.warp." + name);
 const visibleWarps = (_partial: string, { sender }: CommandSuggestionContext) =>

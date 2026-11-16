@@ -48,6 +48,7 @@ function createRuneDashboard({ rune, telemetry, configs, panels, register }) {
   }
 
   return {
+    apiVersion: 2,
     isInstalled: () => installed,
     whenInstalled(fn) {
       if (typeof fn !== 'function') throw new TypeError('Expected a dashboard installation callback');

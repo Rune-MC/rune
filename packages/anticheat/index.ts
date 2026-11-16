@@ -10,13 +10,17 @@ const config = rune.config("anticheat", {
 const movement = new WindowDetector();
 const combat = new WindowDetector();
 interface PlayerState { pauseUntil: number; lastAlert: number; alerts: number }
+export type AnticheatAlert = { playerId: string; name: string; check: "movement" | "melee"; rate: number; limit: number; timestamp: number };
 const state = new Map<string, PlayerState>();
+const recent: AnticheatAlert[] = [];
 const uuid = (player: Player) => String(player.getUniqueId());
 let tps = 20;
-rune.dashboard?.whenInstalled?.(async () => (await import("./dashboard.tsx")).registerDashboard(
-  () => ({ ...config.read(), "Estimated TPS": Number(tps.toFixed(1)) }),
-  () => rune.players().map((player) => ({ name: player.getName(), ping: player.getPing(), alerts: state.get(uuid(player))?.alerts ?? 0 })),
-));
+rune.dashboard?.whenInstalled?.(async () => {
+  if (!(rune.dashboard.apiVersion >= 2)) return;
+  return (await import("./dashboard.tsx")).registerDashboard(config, () => Number(tps.toFixed(1)),
+    () => rune.players().map((player) => ({ id: uuid(player), name: player.getName(), ping: player.getPing(), alerts: state.get(uuid(player))?.alerts ?? 0 })),
+    () => recent);
+});
 rune.schedule.everyTicks(() => {
   const milliseconds: unknown = rune.bukkit.getAverageTickTime();
   if (typeof milliseconds === "number" && milliseconds > 0) tps = Math.min(20, 1000 / milliseconds);
@@ -54,7 +58,10 @@ function alert(player: Player, check: "movement" | "melee", rate: number, limit:
   for (const staff of rune.players((p) => p.isOp() || p.hasPermission("rune.anticheat.alerts"))) {
     staff.sendMessage(message);
   }
-  void rune.events.emit("anticheat.alert", { playerId, name, check, rate, limit, timestamp: now });
+  const event = { playerId, name, check, rate, limit, timestamp: now };
+  recent.push(event);
+  if (recent.length > 200) recent.shift();
+  void rune.events.emit("anticheat.alert", { ...event });
 }
 
 @Listener

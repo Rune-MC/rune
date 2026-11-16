@@ -1,17 +1,34 @@
 /** @jsxImportSource react */
+import { useId } from "react";
+import { ChevronRight } from "lucide-react";
 import { Card, Details, FormField } from "./ui.tsx";
 import { asLink } from "./pages.tsx";
 
 export type Contribution = ReturnType<RuneDashboardMonitor["contributions"]> extends Map<string, infer Value> ? Value : never;
 
+type Operation = string | { id: string; key?: string; label?: string; defaults?: Record<string, RuneDashboardValue> };
+export function Operations({ context, items, title = "Manage" }: { context: RuneDashboardPageContext; items: Operation[]; title?: string }) {
+  if (!items.length) return null;
+  return <section className="operations"><h2>{title}</h2>
+    {items.map((item) => {
+      const operation = typeof item === "string" ? { id: item } : item;
+      return <details key={operation.key ?? operation.id} className="operation">
+        <summary><ChevronRight size={16} aria-hidden="true" />{operation.label ?? operation.id.replaceAll("-", " ")}</summary>
+        {context.action(operation.id, operation.defaults)}
+      </details>;
+    })}
+  </section>;
+}
+
 export function ActionForm({ module, action, csrf, defaults = {} }: {
   module: Contribution; action: string; csrf: string; defaults?: Record<string, RuneDashboardValue>;
 }) {
   const actionSpec = module.actions.get(action);
+  const legend = useId();
   if (!actionSpec) throw new Error("Dashboard action is unavailable: " + action);
-  return <form className="card" method="post" action={asLink(asLink("/tools", module.id) + "/actions", action)}>
+  return <form className="card" method="post" aria-labelledby={legend} action={asLink(asLink("/tools", module.id) + "/actions", action)}>
     <input type="hidden" name="csrf" value={csrf} />
-    <fieldset><legend>{actionSpec.title}</legend>
+    <fieldset><legend id={legend}>{actionSpec.title}</legend>
       {actionSpec.description && <p>{actionSpec.description}</p>}
       {Object.entries(actionSpec.fields).map(([name, spec]) =>
         <FormField key={name} name={name} spec={spec} value={defaults[name] ?? spec.default} />)}
@@ -21,8 +38,8 @@ export function ActionForm({ module, action, csrf, defaults = {} }: {
   </form>;
 }
 
-export function ToolHome({ module, metrics, metricsFailed, csrf }: {
-  module: Contribution; metrics?: Record<string, RuneDashboardValue | null>; metricsFailed: boolean; csrf: string;
+export function ToolHome({ module, metrics, metricsFailed, context }: {
+  module: Contribution; metrics?: Record<string, RuneDashboardValue | null>; metricsFailed: boolean; context: RuneDashboardPageContext;
 }) {
   const root = asLink("/tools", module.id);
   return <div className="stack">
@@ -31,7 +48,6 @@ export function ToolHome({ module, metrics, metricsFailed, csrf }: {
     </Card>}
     {metricsFailed && <p role="alert" className="note error">This Rune’s metrics could not be read.</p>}
     {metrics && <Card title="Live metrics"><Details values={metrics} /></Card>}
-    {module.actions.size > 0 && <div className="form-grid">{[...module.actions.keys()].map((id) =>
-      <ActionForm key={id} module={module} action={id} csrf={csrf} />)}</div>}
+    <Operations context={context} items={[...module.actions].map(([id, action]) => ({ id, label: action.title }))} />
   </div>;
 }

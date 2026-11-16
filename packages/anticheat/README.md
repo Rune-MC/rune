@@ -54,3 +54,7 @@ rune.events.on<Alert>("anticheat.alert", (alert) => {
 
 With `@rune/dashboard` running on Rune 0.5.3 or newer, this Rune adds
 its own navigation and pages. Inspect monitoring thresholds and alert counts for online players.
+
+## Dashboard
+
+Open **Anticheat** in Rune Dashboard to inspect current player sessions and recent detection alerts, filter alerts by player, and configure thresholds. This page requires Rune 0.5.4 or newer and @rune/dashboard 0.1.2 or newer.

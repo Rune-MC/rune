@@ -6,6 +6,7 @@
     "build": "esbuild client.tsx --bundle --jsx=automatic --minify --legal-comments=linked --outfile=web/dashboard.js"
   },
   "dependencies": {
+    "lucide-react": "1.73.0",
     "react": "19.3.1",
     "react-dom": "19.3.1"
   },

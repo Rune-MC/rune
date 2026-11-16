@@ -106,6 +106,7 @@ interface RuneApi {
     ): RuneSettings<{ -readonly [K in keyof T]: WidenRuneSetting<T[K]> }>;
 
     readonly dashboard: {
+        readonly apiVersion: number;
         panel(id: string, title: string, read: () => Record<string, RuneSettingValue>): () => void;
         start(options: { port?: number; token: string }): Server;
         /** True once the official dashboard has started accepting requests. */
@@ -617,8 +618,9 @@ declare global {
             gc: { name: string; collections: number | null; timeMs: number | null }[] };
         plugins: { name: string; version: string; enabled: boolean; description: string | null; authors: string[]; listeners: number; pendingTasks: number | null }[];
         worlds: { name: string; environment: string; players: number; chunks: number }[];
-        players: { name: string; world: string; mode: string; ping: number }[];
+        players: { id?: string; name: string; world: string; mode: string; ping: number }[];
         scripts: Record<string, string>;
+        libraries?: string[];
     }
     interface RuneDashboardSnapshot {
         host: RuneDashboardServer | null;
