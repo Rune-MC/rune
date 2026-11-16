@@ -30,7 +30,7 @@ function AccessRows({ access, existing = {} }: { access?: Access; existing?: Rec
 function groupsPage(context: RuneDashboardPageContext, data: PermissionState) {
   const group = context.query("id") ?? "";
   const selected = Object.hasOwn(data.groups, group) ? data.groups[group] : undefined;
-  const defaults = { kind: "group", subject: group };
+  const defaults = { subject: group };
   return <div className="stack">
     <Table title="Groups" columns={["Group", "Weight", "Parents", "Rules"]} rows={Object.entries(data.groups).map(([id, row]) => ({
       key: id, cells: [<a href={link(context, "groups", id)}>{id}</a>, row.weight ?? 0,
@@ -40,7 +40,7 @@ function groupsPage(context: RuneDashboardPageContext, data: PermissionState) {
       <Operations title={`Manage ${group}`} context={context} items={[
         { id: "weight", label: "Set weight", defaults: { group, weight: selected.weight ?? 0 } },
         { id: "inheritance", label: "Edit inheritance", defaults: { group } },
-        { id: "rule", label: "Edit permission rule", defaults }, { id: "decoration", label: "Edit prefix or suffix", defaults },
+        { id: "group-rule", label: "Edit permission rule", defaults }, { id: "group-decoration", label: "Edit prefix or suffix", defaults },
         ...(group === "default" ? [] : [{ id: "delete-group", label: "Delete group", defaults: { group } }]),
       ]} /></>}
     <Operations context={context} title="Groups" items={["create-group"]} />
@@ -87,8 +87,8 @@ function playersPage(context: RuneDashboardPageContext, data: PermissionState) {
       <Operations context={context} title={`Manage ${selected.name}`} items={[
         ...["membership", "primary", "move-rank"].map((action, index) => ({ id: action, label: ["Grant or revoke group", "Set primary group", "Promote or demote"][index],
           defaults: { player: selected.id, ...(action === "primary" && access?.primary ? { group: access.primary } : {}) } })),
-        { id: "rule", label: "Edit direct permission", defaults: { kind: "player", subject: selected.id } },
-        { id: "decoration", label: "Edit prefix or suffix", defaults: { kind: "player", subject: selected.id } },
+        { id: "player-rule", label: "Edit direct permission", defaults: { subject: selected.id } },
+        { id: "player-decoration", label: "Edit prefix or suffix", defaults: { subject: selected.id } },
       ]} />
     </>}
   </div>;

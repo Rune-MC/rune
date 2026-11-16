@@ -576,6 +576,8 @@ declare global {
         maxLength?: number;
         multiline?: boolean;
         choices?: Record<string, string>;
+        /** For a string action field, offer a player picker that submits the selected UUID. */
+        player?: "known" | "online";
     };
     interface RuneDashboardPageContext {
         query(key: string): string | null;

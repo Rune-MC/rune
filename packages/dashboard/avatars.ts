@@ -1,7 +1,9 @@
-import { avatarKey } from "./avatar-url.ts";
+import { avatarKey, playerName } from "./avatar-url.ts";
 const fallback = Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNgYAAAAAMAASsJTYQAAAAASUVORK5CYII=", "base64");
 const cache = new Map<string, { body: Uint8Array; expires: number }>();
 const inFlight = new Map<string, Promise<Uint8Array>>();
+const queued: (() => void)[] = [];
+let fetching = 0;
 
 async function fetchImage(key: string): Promise<Uint8Array> {
   const limit = 64 * 1024;
@@ -34,9 +36,18 @@ async function fetchImage(key: string): Promise<Uint8Array> {
   }
 }
 
-export async function avatar(value: string): Promise<Uint8Array> {
-  const key = avatarKey(value);
-  if (!key) return fallback;
+async function fetchQueued(key: string) {
+  if (fetching < 8) fetching++;
+  else await new Promise<void>((ready) => queued.push(ready));
+  try { return await fetchImage(key); }
+  finally {
+    const next = queued.shift();
+    if (next) next();
+    else fetching--;
+  }
+}
+
+async function lookup(key: string): Promise<Uint8Array> {
   const saved = cache.get(key);
   if (saved && saved.expires > Date.now()) {
     cache.delete(key);
@@ -45,8 +56,8 @@ export async function avatar(value: string): Promise<Uint8Array> {
   }
   const pending = inFlight.get(key);
   if (pending) return pending;
-  if (inFlight.size >= 8) return fallback;
-  const job = fetchImage(key).then((body) => {
+  if (inFlight.size >= 40) return fallback;
+  const job = fetchQueued(key).then((body) => {
     cache.delete(key);
     cache.set(key, { body, expires: Date.now() + (body === fallback ? 5 : 60) * 60_000 });
     while (cache.size > 256) cache.delete(cache.keys().next().value!);
@@ -54,4 +65,13 @@ export async function avatar(value: string): Promise<Uint8Array> {
   }).finally(() => inFlight.delete(key));
   inFlight.set(key, job);
   return job;
+}
+
+export async function avatar(value: string, name?: string) {
+  const key = avatarKey(value);
+  let body = key ? await lookup(key) : fallback;
+  if (body === fallback && name && playerName.test(name) && name.toLowerCase() !== key) {
+    body = await lookup(name.toLowerCase());
+  }
+  return { body, maxAge: body === fallback ? 0 : 300 };
 }

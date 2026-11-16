@@ -25,7 +25,7 @@ export function registerDashboard(read: () => Record<string, Npc>, edit: Edit) {
   const id = { type: "string", label: "NPC ID", required: true, maxLength: 24 } as const;
   const title = { type: "string", label: "Display title", maxLength: 64 } as const;
   const line = { type: "string", label: "Dialogue", maxLength: 300, multiline: true } as const;
-  const anchor = { type: "string", label: "Online player to place the NPC at", required: true, maxLength: 36 } as const;
+  const anchor = { type: "string", player: "online", label: "Online player to place the NPC at", required: true, maxLength: 36 } as const;
   return rune.dashboard.register({
     id: "npcs", title: "NPCs", navigation: [{ page: "registry" }],
     metrics: () => ({ "Registered NPCs": Object.keys(read()).length, Worlds: new Set(Object.values(read()).map(({ at }) => at.world)).size }),

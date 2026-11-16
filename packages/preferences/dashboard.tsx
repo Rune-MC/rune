@@ -54,7 +54,7 @@ export function registerDashboard(keys: readonly Setting[], read: () => Record<s
     actions: {
       preference: {
         title: "Set player preference", fields: {
-          player: { type: "string", label: "Player name or UUID", required: true, maxLength: 36 },
+          player: { type: "string", player: "known", label: "Player", required: true, maxLength: 36 },
           setting: { type: "string", choices: labels, required: true }, enabled: { type: "boolean", label: "Enable this preference" },
         },
         async run(input) {

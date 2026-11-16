@@ -24,7 +24,7 @@ const online = (input: RuneDashboardValue) => {
 export function registerDashboard(read: () => Record<string, Warp>, edit: Edit, canVisit: (sender: CommandSender, name: string, warp: Warp) => boolean) {
   const name = { type: "string", label: "Warp name", required: true, maxLength: 24 } as const;
   const restricted = { type: "boolean", label: "Require the warp permission" } as const;
-  const player = { type: "string", label: "Online player name or UUID", required: true, maxLength: 36 } as const;
+  const player = { type: "string", player: "online", label: "Online player", required: true, maxLength: 36 } as const;
   return rune.dashboard.register({
     id: "warps", title: "Warps", navigation: [{ page: "destinations" }],
     metrics: () => ({ "Saved warps": Object.keys(read()).length, Restricted: Object.values(read()).filter((warp) => warp.restricted).length }),

@@ -3,7 +3,7 @@ import {
   Activity, Boxes, Flag, House, KeyRound, LayoutDashboard, ListTree, MapPin, Megaphone, MessageSquare,
   Puzzle, ScrollText, Server, Settings, Shield, SlidersHorizontal, Sword, UserRound, Users, type LucideIcon,
 } from "lucide-react";
-import { avatarKey } from "./avatar-url.ts";
+import { avatarKey, playerName } from "./avatar-url.ts";
 
 const navigation = new Map<string, LucideIcon>([
   ["/", LayoutDashboard], ["/runes", Boxes], ["/server", Server], ["/players", Users],
@@ -20,13 +20,18 @@ export function NavIcon({ path }: { path: string }) {
   return <Icon className="nav-icon" size={17} aria-hidden="true" focusable="false" />;
 }
 
+export function PlayerHead({ name, id }: { name: string; id?: string }) {
+  const key = id ? avatarKey(id) : avatarKey(name);
+  const query = id && playerName.test(name) && key !== name.toLowerCase() ? "?name=" + encodeURIComponent(name) : "";
+  return <span className="player-avatar" aria-hidden="true">
+    <UserRound size={16} focusable="false" />
+    {key && <img src={"/avatars/" + key + query} alt="" width={26} height={26} loading="lazy" />}
+  </span>;
+}
+
 export function PlayerIdentity({ name, id }: { name: string; id?: string }) {
-  const key = (id && avatarKey(id)) || avatarKey(name);
   return <span className="player-identity">
-    <span className="player-avatar" aria-hidden="true">
-      <UserRound size={16} focusable="false" />
-      {key && <img src={"/avatars/" + key} alt="" width={26} height={26} loading="lazy" />}
-    </span>
+    <PlayerHead name={name} id={id} />
     <span>{name}</span>
   </span>;
 }

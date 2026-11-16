@@ -22,7 +22,7 @@ function ownerId(input: RuneDashboardValue) {
 
 export function registerDashboard(read: () => Homes, save: Save, remove: Remove, visit: (player: Player, id: string, name: string) => void) {
   const name = { type: "string", label: "Home name", required: true, maxLength: 24 } as const;
-  const owner = { type: "string", label: "Owner’s name or UUID", required: true, maxLength: 36 } as const;
+  const owner = { type: "string", player: "known", label: "Home owner", required: true, maxLength: 36 } as const;
   return rune.dashboard.register({
     id: "homes", title: "Homes", navigation: [{ page: "destinations" }],
     metrics: () => ({ Owners: Object.keys(read()).length, Homes: Object.values(read()).reduce((total, homes) => total + Object.keys(homes).length, 0) }),
@@ -59,7 +59,7 @@ export function registerDashboard(read: () => Homes, save: Save, remove: Remove,
     } } },
     actions: {
       save: {
-        title: "Save home at a player’s position", fields: { owner, name, anchor: { type: "string", label: "Online player at the destination", required: true, maxLength: 36 } },
+        title: "Save home at a player’s position", fields: { owner, name, anchor: { type: "string", player: "online", label: "Online player at the destination", required: true, maxLength: 36 } },
         async run(input) {
           const id = ownerId(input.owner);
           const key = homeName(input.name);
@@ -70,7 +70,7 @@ export function registerDashboard(read: () => Homes, save: Save, remove: Remove,
         },
       },
       visit: {
-        title: "Teleport owner to home", confirm: "Move this player to their saved home", fields: { owner, name },
+        title: "Teleport owner to home", confirm: "Move this player to their saved home", fields: { owner: { ...owner, player: "online" }, name },
         run(input) {
           const id = ownerId(input.owner);
           const player = rune.player(id);

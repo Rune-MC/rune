@@ -11,6 +11,8 @@ const id = { type: "number", required: true, min: 1, max: Number.MAX_SAFE_INTEGE
 const channel = { type: "string", label: "Channel ID", required: true, maxLength: 24 } as const;
 const slow = { type: "number", label: "Seconds between messages (0 disables)", required: true, min: 0, max: 600 } as const;
 const duration = { type: "string", default: "permanent", maxLength: 50, description: durationHelp } as const;
+const player = { type: "string", player: "known", label: "Player", required: true, maxLength: 36 } as const;
+const onlinePlayer = { ...player, player: "online" } as const;
 const run = (operation: (sender: CommandSender, done: (message: string) => void, reject: (message: string) => void) => void) =>
   new Promise<string>((resolve, reject) => operation(rune.bukkit.getConsoleSender(), resolve, (error) => reject(new Error(error))));
 function caseId(value: RuneDashboardValue) {
@@ -22,14 +24,27 @@ export const moderationActions = {
   "issue-case": {
     title: "Issue moderation action", confirm: "Apply this action to the selected target",
     fields: {
-      kind: { type: "string", label: "Action", required: true, choices: Object.fromEntries(kinds.map((kind) => [kind, kind.toUpperCase()])) },
-      target: { type: "string", label: "Player name, UUID, or IP address for IP bans", required: true, maxLength: 64 },
+      kind: { type: "string", label: "Action", required: true, choices: Object.fromEntries(kinds.filter((kind) => kind !== "ipban").map((kind) => [kind, kind.toUpperCase()])) },
+      target: player,
       reason, duration: { ...duration, label: "Duration for bans, mutes, and freezes" },
     },
     run: (input) => run((sender, done, reject) => {
       const kind = input.kind as Kind;
-      const target = kind === "ipban" ? address(String(input.target), true) : person(String(input.target));
-      issue(sender, kind, target, String(input.reason), String(input.duration || "permanent"), done, reject);
+      issue(sender, kind, person(String(input.target)), String(input.reason), String(input.duration || "permanent"), done, reject);
+    }),
+  },
+  "ip-ban": {
+    title: "Ban IP address", description: "Choose an online player to use their current IP address, or enter an address directly.",
+    confirm: "Ban connections from this IP address", fields: {
+      player: { ...onlinePlayer, label: "Online player", required: false },
+      address: { type: "string", label: "IP address", maxLength: 64 }, reason, duration,
+    },
+    run: (input) => run((sender, done, reject) => {
+      const player = String(input.player ?? "").trim();
+      const ip = String(input.address ?? "").trim();
+      if (Boolean(player) === Boolean(ip)) fail("Choose one online player or enter one IP address.");
+      const target = address(player || ip, Boolean(player));
+      issue(sender, "ipban", target, String(input.reason), String(input.duration || "permanent"), done, reject);
     }),
   },
   "revoke-case": {
@@ -39,8 +54,8 @@ export const moderationActions = {
   "teleport-staff": {
     title: "Teleport staff to player", confirm: "Move the selected staff member to this player",
     fields: {
-      staff: { type: "string", label: "Online staff name or UUID", required: true, maxLength: 36 },
-      target: { type: "string", label: "Destination player name or UUID", required: true, maxLength: 36 },
+      staff: { ...onlinePlayer, label: "Online staff member" },
+      target: { ...onlinePlayer, label: "Destination player" },
     },
     run(input) {
       const staff = online(person(String(input.staff)).id) ?? fail("The staff member must be online.");

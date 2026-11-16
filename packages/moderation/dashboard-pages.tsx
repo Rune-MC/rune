@@ -65,6 +65,7 @@ export function CasePage(context: RuneDashboardPageContext, data: ModerationStat
       "Revoked by": selected.revoked?.actor.name ?? "—", "Revocation reason": selected.revoked?.reason ?? "—" }} /></Card>}
     <Operations context={context} items={[
       { id: "issue-case", label: "Issue moderation action" },
+      { id: "ip-ban", label: "Ban IP address" },
       ...(selected && active(selected) ? [{ id: "revoke-case", label: "Revoke this punishment", defaults: { case: selected.id } }] : []),
     ]} />
   </div>;

@@ -1,5 +1,5 @@
 name = "@rune/homes"
-version = "0.1.5"
+version = "0.1.6"
 language = "typescript"
 entry = "index.ts"
 description = "Private homes with persistence, a configurable limit, and a teleport cooldown."

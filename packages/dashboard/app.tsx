@@ -14,6 +14,7 @@ import { ActionForm, Operations, ToolHome, type Contribution } from "./tools.tsx
 import { Card, Details, Shell, Table } from "./ui.tsx";
 import { avatar } from "./avatars.ts";
 import { PlayerIdentity } from "./identity.tsx";
+import { createPlayerDirectory, findPlayerOptions } from "./players.ts";
 
 const headers = {
   "Cache-Control": "no-store",
@@ -44,6 +45,7 @@ export async function startConsole(port: number) {
   const secret = randomBytes(32);
   const audit = rune.store("dashboard-activity");
   const monitor = rune.dashboard.monitor({ ...jsxRuntime, react: React, components: { Card, Details, Table, Operations, PlayerIdentity } });
+  const playerOptions = createPlayerDirectory();
   let auditRows = audit.get<Audit[]>("rows") ?? [];
 
   function record(target: string, operation: string, result: Audit["result"], actor: string) {
@@ -62,7 +64,7 @@ export async function startConsole(port: number) {
     return ctx.text("", 303, { ...headers, Location: destination, ...(cookie ? { "Set-Cookie": cookie } : {}) });
   };
 
-  function page(ctx: ServeContext, title: string, active: string, children: React.ReactNode, options: { subtitle?: string; live?: boolean; status?: number } = {}) {
+  function page(ctx: ServeContext, title: string, active: string, children: React.ReactNode, options: { subtitle?: string; interactive?: boolean; status?: number } = {}) {
     const tools = [...monitor.contributions().values()].flatMap((module) => module.navigation.map(({ page, label }) => ({
       href: page ? asLink(path(module.id), page) : path(module.id), label,
     })));
@@ -176,10 +178,17 @@ export async function startConsole(port: number) {
       })));
 
       app.get("/api/overview", guarded((ctx) => ctx.json(overview(), 200, headers)));
-      app.get("/avatars/:id", guarded(async (ctx) => ({
-        status: 200, headers: { ...headers, "Content-Type": "image/png", "Cache-Control": "private, max-age=300" },
-        body: await avatar(ctx.param("id") ?? ""),
-      })));
+      app.get("/api/player-options", guarded(async (ctx) => {
+        const availability = ctx.query("availability") === "online" ? "online" : "known";
+        const query = ctx.query("q")?.slice(0, 64) ?? "";
+        const selected = ctx.query("selected")?.slice(0, 36) ?? "";
+        const directory = await onMain(() => playerOptions(availability));
+        return ctx.json(findPlayerOptions(directory, query, availability, selected), 200, headers);
+      }));
+      app.get("/avatars/:id", guarded(async (ctx) => {
+        const { body, maxAge } = await avatar(ctx.param("id") ?? "", ctx.query("name") ?? undefined);
+        return { status: 200, headers: { ...headers, "Content-Type": "image/png", ...(maxAge ? { "Cache-Control": `private, max-age=${maxAge}` } : {}) }, body };
+      }));
       app.get("/", guarded(async (ctx, session) => {
         const initial = overview();
         const state = JSON.stringify(initial).replaceAll("<", "\\u003c");
@@ -204,7 +213,7 @@ export async function startConsole(port: number) {
           <div id="overview" dangerouslySetInnerHTML={{ __html: renderToString(<Overview initial={initial} />) }} />
           <script id="overview-state" type="application/json" dangerouslySetInnerHTML={{ __html: state }} />
           {panels.length + widgets.length > 0 && <div className="grid section">{panels}{widgets}</div>}
-        </>, { live: true, subtitle: initial.snapshot?.host?.server.version });
+        </>, { interactive: true, subtitle: initial.snapshot?.host?.server.version });
       }));
       app.get("/server", guarded((ctx, session) => page(ctx, "Server", "/server",
         <Server host={monitor.snapshot()?.host} csrf={session.csrf} />)));
@@ -254,7 +263,7 @@ export async function startConsole(port: number) {
         catch (error) { metricsFailed = true; console.warn("Rune tool metrics failed:", module.id, error); }
         return page(ctx, module.title, path(module.id), <ToolHome module={module} metrics={metrics} metricsFailed={metricsFailed}
           context={pluginContext(ctx, module, session.csrf)} />,
-          { subtitle: module.description });
+          { subtitle: module.description, interactive: true });
       }));
       app.get("/tools/:id/:page", guarded(async (ctx, session) => {
         const module = monitor.contributions().get(ctx.param("id") ?? "");
@@ -263,7 +272,7 @@ export async function startConsole(port: number) {
         if (!module || !selected) throw new RequestError(404, "Rune tool page unavailable.");
         const content = await renderTool(selected, ctx, module, session.csrf);
         const active = module.navigation.some((link) => link.page === pageId) ? asLink(path(module.id), pageId) : path(module.id);
-        return page(ctx, selected.title, active, <><p><a href={path(module.id)}>{module.title}</a></p>{content}</>, { subtitle: module.description });
+        return page(ctx, selected.title, active, <><p><a href={path(module.id)}>{module.title}</a></p>{content}</>, { subtitle: module.description, interactive: true });
       }));
       app.post("/tools/:id/actions/:action", guarded(async (ctx, session) => {
         const values = await form(ctx, session.origin, session.csrf);

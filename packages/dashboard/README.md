@@ -90,6 +90,11 @@ Actions declare typed fields and can require confirmation. The console
 validates submitted values and records the outcome in Activity. Use
 `context.onMain()` for Paper API calls after awaiting I/O.
 
+Set `player: "known"` on a string action field to show a searchable
+player picker. Set `player: "online"` when the action requires a live
+player. The picker submits the UUID and shows the player's head, name,
+and UUID. Validate that the player is still online when your action runs.
+
 Moderation, Permissions, Anticheat, Announcements, Homes, Warps, NPCs, and
 Preferences all contribute pages when installed. Their source also shows
 how to register pages and wire actions to existing Rune logic.

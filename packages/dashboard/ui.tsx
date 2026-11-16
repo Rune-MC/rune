@@ -57,8 +57,8 @@ export function Table({ title, columns, rows, empty = "No entries to display." }
   </div>;
 }
 
-export function Shell({ title, subtitle, active, tools, children, live }: {
-  title: string; subtitle?: string; active: string; tools: { href: string; label: string }[]; children: ReactNode; live?: boolean;
+export function Shell({ title, subtitle, active, tools, children, interactive }: {
+  title: string; subtitle?: string; active: string; tools: { href: string; label: string }[]; children: ReactNode; interactive?: boolean;
 }) {
   const navigation = [
     ["/", "Overview"], ["/runes", "Runes"], ["/server", "Server"], ["/players", "Players"],
@@ -70,7 +70,7 @@ export function Shell({ title, subtitle, active, tools, children, live }: {
       <meta name="viewport" content="width=device-width,initial-scale=1" />
       <title>{title + " · Rune"}</title>
       <link rel="stylesheet" href="/assets/dashboard.css" />
-      {live && <script src="/assets/dashboard.js" defer />}
+      {interactive && <script src="/assets/dashboard.js" defer />}
     </head>
     <body>
       <a className="skip" href="#main">Skip to content</a>
@@ -108,7 +108,10 @@ export function FormField({ name, spec, value }: {
   return <div className="field">
     <label htmlFor={id}>{spec.label ?? name}</label>
     {spec.description && <small id={helpId}>{spec.description}</small>}
-    {spec.choices ? <select {...attributes} defaultValue={String(value ?? "")}>
+    {spec.type === "string" && spec.player ? <div data-player-picker={spec.player} data-label={spec.label ?? name}>
+      <input {...attributes} defaultValue={String(value ?? "")} maxLength={spec.maxLength ?? 36} placeholder="Player name or UUID"
+        autoComplete="off" autoCapitalize="none" autoCorrect="off" spellCheck={false} />
+    </div> : spec.choices ? <select {...attributes} defaultValue={String(value ?? "")}>
       <option value="">Select a value</option>
       {Object.entries(spec.choices).map(([choice, label]) => <option key={choice} value={choice}>{label}</option>)}
     </select> : spec.type === "number" ?
