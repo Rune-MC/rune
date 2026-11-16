@@ -162,3 +162,8 @@ The version 1 `moderation` service exposes `active(kind, target)` and
 `ban(uuid, ip?)`. The custom events `moderation.case.created`,
 `moderation.case.revoked`, and `moderation.report.updated` expose locally
 committed updates for integrations.
+
+## Web dashboard
+
+With `@rune/dashboard` running on Rune 0.5.3 or newer, this Rune adds
+its own navigation and pages. Inspect recent cases and resolve player reports.

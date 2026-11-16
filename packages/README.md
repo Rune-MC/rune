@@ -7,6 +7,7 @@ listeners through Rune's decorators. Install from a Paper server with
 | Package | Purpose |
 | --- | --- |
 | `web-auth` | Password auth, revocable JWTs or opaque sessions, recovery, and Fetch handlers |
+| `dashboard` | React operator console with live Paper metrics and tools from installed Runes |
 | `storage` | Atomic record and typed document interfaces |
 | `mongo`, `mysql`, `postgres`, `sqlite`, `redis` | Database adapters |
 | `permissions` | Permission groups, timed and scoped grants, Adventure labels, promotion tracks, and global and per-channel chat layouts |

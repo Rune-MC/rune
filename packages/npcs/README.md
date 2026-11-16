@@ -50,3 +50,8 @@ Use the server environment to set `RUNE_NPCS_STORAGE` to `local`,
 `reuse:shared`, or `connect`. For `connect`, install the database adapter and set
 `RUNE_NPCS_DB_URL`. The default keeps existing local data and otherwise prefers
 an open connection when available. [Storage setup](https://github.com/Rune-MC/rune/tree/main/packages/storage#share-an-open-database-on-paper)
+
+## Web dashboard
+
+With `@rune/dashboard` running on Rune 0.5.3 or newer, this Rune adds
+its own navigation and pages. Browse NPCs and edit their dialogue.

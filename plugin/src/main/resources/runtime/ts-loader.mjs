@@ -43,6 +43,8 @@ const isTs = (url) => url.endsWith('.ts') || url.endsWith('.tsx');
 // scripts opt out of globals and instead pull their aliases explicitly
 // (better for module isolation + tree-shaking awareness).
 const RUNE_VIRTUAL_URL = 'rune:globals';
+const DASHBOARD_JSX = 'rune:dashboard/jsx-runtime';
+const DASHBOARD_REACT = 'rune:dashboard';
 
 // For relative/absolute imports that omit a file extension (e.g.
 // `import "./lib/foo"`), Node ESM strict resolution gives up with
@@ -56,6 +58,9 @@ const HAS_EXT = /\.[a-zA-Z0-9]+$/;
 export async function resolve(specifier, context, nextResolve) {
   if (specifier === 'rune') {
     return { url: RUNE_VIRTUAL_URL, shortCircuit: true, format: 'module' };
+  }
+  if (specifier === DASHBOARD_JSX || specifier === DASHBOARD_REACT) {
+    return { url: specifier, shortCircuit: true, format: 'module' };
   }
   try {
     return await nextResolve(specifier, context);
@@ -79,6 +84,25 @@ export async function resolve(specifier, context, nextResolve) {
 }
 
 export async function load(url, context, nextLoad) {
+  if (url === DASHBOARD_JSX || url === DASHBOARD_REACT) {
+    const source = url === DASHBOARD_JSX ? `
+      const runtime = () => globalThis.rune.dashboard.reactRuntime();
+      export const Fragment = Symbol.for('react.fragment');
+      export const jsx = (...args) => runtime().jsx(...args);
+      export const jsxs = (...args) => runtime().jsxs(...args);
+    ` : `
+      const react = () => globalThis.rune.dashboard.reactRuntime().react;
+      export const Fragment = Symbol.for('react.fragment');
+      export const createElement = (...args) => react().createElement(...args);
+      export const useId = (...args) => react().useId(...args);
+      export const useContext = (...args) => react().useContext(...args);
+      const components = () => globalThis.rune.dashboard.reactRuntime().components;
+      export const Table = (props) => createElement(components().Table, props);
+      export const Details = (props) => createElement(components().Details, props);
+      export const Card = (props) => createElement(components().Card, props);
+    `;
+    return { format: 'module', source, shortCircuit: true };
+  }
   if (url === RUNE_VIRTUAL_URL) {
     // Read the alias config and emit a one-line-per-alias ESM module
     // that re-exports each from globalThis. The bootstrap binds those
@@ -106,6 +130,7 @@ export async function load(url, context, nextLoad) {
   const source = await readFile(fileURLToPath(cleanUrl), 'utf8');
   const result = await esbuild.transform(source, {
     loader: cleanUrl.endsWith('.tsx') ? 'tsx' : 'ts',
+    jsx: cleanUrl.endsWith('.tsx') && /@jsxImportSource\s+\S+/.test(source) ? 'automatic' : 'transform',
     target: 'es2022',
     format: 'esm',
     sourcefile: fileURLToPath(cleanUrl),

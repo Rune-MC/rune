@@ -1,18 +1,18 @@
 
 const runeExtensions = (() => {
   const rune = globalThis.rune;
-  const { AsyncLocalStorage } = require('node:async_hooks');
-  const { randomBytes, timingSafeEqual } = require('node:crypto');
-  const { readFileSync, readdirSync } = require('node:fs');
-  const { join, relative } = require('node:path');
-  const owners = new AsyncLocalStorage();
+  const telemetry = createRuneTelemetry();
   const services = new Map();
   const topics = new Map();
   const configs = new Map();
   const panels = new Map();
-  const scripts = new Map();
-  const logs = [];
-  const started = new Date().toISOString();
+  const { randomBytes, timingSafeEqual } = require('node:crypto');
+  const { readFileSync, readdirSync } = require('node:fs');
+  const { join } = require('node:path');
+  const started = new Date(telemetry.started).toISOString();
+  const scripts = telemetry.scripts;
+  globalThis.__rune_track = telemetry.track;
+  globalThis.__rune_cleanup = telemetry.cleanup;
 
   function identifier(id) {
     if (typeof id !== 'string' || !/^[a-z][a-z0-9-]*(?:[./:][a-z][a-z0-9-]*)*$/.test(id)) {
@@ -27,7 +27,7 @@ const runeExtensions = (() => {
     const dispose = () => {
       if (registry.get(key) === entry) registry.delete(key);
     };
-    owners.getStore()?.push(dispose);
+    telemetry.cleanup(dispose);
     return dispose;
   }
 
@@ -51,14 +51,14 @@ const runeExtensions = (() => {
       const key = identifier(topic);
       if (typeof handler !== 'function') throw new TypeError('Expected an event handler');
       const listeners = topics.get(key) ?? new Set();
-      const registration = { handler };
+      const registration = { handler: telemetry.track('signals', handler) };
       listeners.add(registration);
       topics.set(key, listeners);
       const dispose = () => {
         listeners.delete(registration);
         if (!listeners.size && topics.get(key) === listeners) topics.delete(key);
       };
-      owners.getStore()?.push(dispose);
+      telemetry.cleanup(dispose);
       return dispose;
     },
     async emit(topic, payload) {
@@ -112,10 +112,12 @@ const runeExtensions = (() => {
       store.set('settings', next);
       return next;
     }
-    register(configs, key, { schema, read, update });
+    register(configs, key, { schema, read, update, owner: telemetry.current()?.path });
     if (!store.has('settings')) store.set('settings', read());
     return Object.freeze({ read, update });
   };
+
+
 
   const escape = (text) => String(text).replace(/[&<>"']/g, (char) =>
     ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[char]);
@@ -166,10 +168,12 @@ small{display:block}fieldset{border:0;padding:0}legend{font-weight:600;font-size
     return `${label}${help}<input ${props} type="${isNumber ? 'number' : 'text'}" value="${escape(value)}"${isNumber ? ' required step="any"' : ''}${isNumber && Number.isFinite(spec.min) ? ` min="${spec.min}"` : ''}${isNumber && Number.isFinite(spec.max) ? ` max="${spec.max}"` : ''}>`;
   }
 
+  const dashboard = createRuneDashboard({ rune, telemetry, configs, panels, register });
   rune.dashboard = Object.freeze({
+    ...dashboard,
     panel(id, title, read) {
       if (typeof read !== 'function') throw new TypeError('Expected a function returning panel fields');
-      return register(panels, identifier(id), { title, read });
+      return register(panels, identifier(id), { title, read: telemetry.track('dashboard', read), owner: telemetry.current()?.path });
     },
     start({ port = 8777, token }) {
       if (typeof token !== 'string' || token.length < 24) throw new Error('Use a dashboard password of at least 24 characters');
@@ -206,11 +210,11 @@ small{display:block}fieldset{border:0;padding:0}legend{font-weight:600;font-size
           }).join(''));
           return ctx.html(`<!doctype html><html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Rune server</title><style>${pageStyle}</style><main>
 <h1>Rune server</h1><section><h2>Runtime</h2><p>Started <time datetime="${started}">${started}</time></p>
-${definitionList(Object.fromEntries(scripts))}
+${definitionList(Object.fromEntries([...scripts].map(([path, script]) => [path, script.status])))}
 <form method="post" action="/reload" aria-label="Reload Runes">${hidden}<button type="submit">Reload Runes</button></form></section>
 <section><h2>Installed packages</h2>${definitionList(installedPackages())}</section>
 ${settings ? `<section><h2>Settings</h2>${settings}</section>` : ''}${output}
-<section><h2>Recent script logs</h2><pre>${escape(logs.join('\n'))}</pre></section></main></html>`, 200, headers);
+<section><h2>Recent script logs</h2><pre>${escape(telemetry.logs.map((entry) => '[' + entry.level + '] ' + entry.text).join('\n'))}</pre></section></main></html>`, 200, headers);
         }));
         app.post('/settings/:id', guard((ctx, form) => {
           const config = configs.get(ctx.param('id'));
@@ -237,8 +241,7 @@ ${settings ? `<section><h2>Settings</h2>${settings}</section>` : ''}${output}
   for (const level of ['log', 'info', 'warn', 'error', 'debug']) {
     const original = console[level];
     console[level] = (...args) => {
-      logs.push(`[${level}] ${_fmt(args).slice(0, 1000)}`);
-      if (logs.length > 100) logs.shift();
+      telemetry.log(level, _fmt(args));
       original(...args);
     };
   }
@@ -287,18 +290,6 @@ ${settings ? `<section><h2>Settings</h2>${settings}</section>` : ''}${output}
         sender.sendMessage(error.message);
       }
     },
-    async load(path, execute) {
-      const title = relative(process.cwd(), path);
-      const dispose = [];
-      try {
-        const result = await owners.run(dispose, execute);
-        scripts.set(title, 'Loaded');
-        return result;
-      } catch (error) {
-        for (const cleanup of dispose.reverse()) cleanup();
-        scripts.set(title, `Failed: ${error.message}`);
-        throw error;
-      }
-    },
+    load: telemetry.load,
   };
 })();

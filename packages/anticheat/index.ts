@@ -13,6 +13,10 @@ interface PlayerState { pauseUntil: number; lastAlert: number; alerts: number }
 const state = new Map<string, PlayerState>();
 const uuid = (player: Player) => String(player.getUniqueId());
 let tps = 20;
+rune.dashboard?.whenInstalled?.(async () => (await import("./dashboard.tsx")).registerDashboard(
+  () => ({ ...config.read(), "Estimated TPS": Number(tps.toFixed(1)) }),
+  () => rune.players().map((player) => ({ name: player.getName(), ping: player.getPing(), alerts: state.get(uuid(player))?.alerts ?? 0 })),
+));
 rune.schedule.everyTicks(() => {
   const milliseconds: unknown = rune.bukkit.getAverageTickTime();
   if (typeof milliseconds === "number" && milliseconds > 0) tps = Math.min(20, 1000 / milliseconds);

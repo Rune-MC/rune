@@ -12,6 +12,8 @@ import { inGame, run } from "./commands/common.ts";
 import { banFor, can, punishment } from "./platform.ts";
 import { channels } from "./chat.ts";
 
+rune.dashboard?.whenInstalled?.(async () => (await import("./dashboard.ts")).registerDashboard());
+
 @Command("channel gui")
 export class ChannelMenu {
   @Run run({ sender }: CommandCtx) { run(sender, () => channelGui(inGame(sender))); }

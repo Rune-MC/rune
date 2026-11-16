@@ -10,3 +10,4 @@ import { startPaper } from "./paper.ts";
 
 startPaper();
 startChat();
+rune.dashboard?.whenInstalled?.(async () => (await import("./dashboard.tsx")).registerDashboard());

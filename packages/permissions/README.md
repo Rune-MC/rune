@@ -197,3 +197,8 @@ seconds. After a sustained database outage, Permissions clears the
 permissions and labels it applied until the database becomes available.
 Back up your database and restart all servers using it when upgrading the
 Permissions Rune.
+
+## Web dashboard
+
+With `@rune/dashboard` running on Rune 0.5.3 or newer, this Rune adds
+its own navigation and pages. View groups and chat layouts, edit weights, and update formats.

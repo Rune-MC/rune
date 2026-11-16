@@ -49,3 +49,8 @@ rune.events.on<Alert>("anticheat.alert", (alert) => {
   console.info(alert.name, alert.check, alert.rate, alert.limit);
 });
 ```
+
+## Web dashboard
+
+With `@rune/dashboard` running on Rune 0.5.3 or newer, this Rune adds
+its own navigation and pages. Inspect monitoring thresholds and alert counts for online players.

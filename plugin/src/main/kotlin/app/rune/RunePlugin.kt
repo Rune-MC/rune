@@ -24,6 +24,8 @@ class RunePlugin : JavaPlugin() {
     private var subscribedEvents: MutableSet<Pair<String, org.bukkit.event.EventPriority>>? = null
     private var scriptCommands: ScriptCommandRegistry? = null
     private val scriptStatuses = linkedMapOf<String, String>()
+
+    internal fun dashboardScripts(): Map<String, String> = scriptStatuses.toMap()
     /**
      * Per-folder library declarations from rune.jsonc. Drives:
      *   * `loadAllScripts` skips folders flagged `library: true`

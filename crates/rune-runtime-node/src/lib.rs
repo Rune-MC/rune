@@ -120,6 +120,9 @@ fn build_bootstrap_js(runtime_dir: &Path) -> String {
     // accepts both forms on Windows).
     let dir = runtime_dir.to_string_lossy().replace('\\', "/");
     let mut bootstrap = BOOTSTRAP_JS_TEMPLATE.replace("__RUNE_RUNTIME_DIR__", &dir);
+    bootstrap.push_str(include_str!("telemetry.cjs"));
+    bootstrap.push_str(include_str!("dashboard-data.cjs"));
+    bootstrap.push_str(include_str!("dashboard.cjs"));
     bootstrap.push_str(include_str!("extensions.cjs"));
     bootstrap.push_str(include_str!("adventure.cjs"));
     bootstrap
@@ -379,7 +382,7 @@ globalThis.rune = {
       // host builds that ignore the extra arg degrade to NORMAL too.
       __rune_subscribe_event(String(event), priority);
     }
-    list.push({ fn, priority, ignoreCancelled });
+    list.push({ fn: globalThis.__rune_track?.('events', fn) ?? fn, priority, ignoreCancelled });
   },
 
   // Reflective Bukkit surface -- identical to the deno_core backend.
@@ -532,14 +535,21 @@ try {
 // the unit Minecraft scripters think in.
 // ---------------------------------------------------------------------------
 
+function _runeSchedule(fn, delay, recurring = false) {
+  const callback = globalThis.__rune_track?.('timers', fn) ?? fn;
+  const handle = recurring ? setInterval(callback, delay) : setTimeout(callback, delay);
+  globalThis.__rune_cleanup?.(() => clearTimeout(handle));
+  return handle;
+}
+
 globalThis.rune.schedule = {
-  afterTicks(fn, ticks)  { return setTimeout(fn, Math.max(0, ticks) * 50); },
-  everyTicks(fn, ticks)  { return setInterval(fn, Math.max(1, ticks) * 50); },
-  afterMs(fn, ms)        { return setTimeout(fn, ms); },
-  everyMs(fn, ms)        { return setInterval(fn, ms); },
+  afterTicks(fn, ticks)  { return _runeSchedule(fn, Math.max(0, ticks) * 50); },
+  everyTicks(fn, ticks)  { return _runeSchedule(fn, Math.max(1, ticks) * 50, true); },
+  afterMs(fn, ms)        { return _runeSchedule(fn, ms); },
+  everyMs(fn, ms)        { return _runeSchedule(fn, ms, true); },
   cancel(handle)         { clearTimeout(handle); clearInterval(handle); },
   /** Run `fn` on the next server tick. */
-  nextTick(fn)           { return setTimeout(fn, 0); },
+  nextTick(fn)           { return _runeSchedule(fn, 0); },
 };
 
 // ---------------------------------------------------------------------------
@@ -1073,20 +1083,30 @@ function _runeGetPlugin() {
   return _runePluginCache;
 }
 
+let _runeMainConsumer;
+let _runeMainQueued = false;
+const _runeMainQueue = [];
+
 globalThis.rune.runOnMain = function (fn) {
   return new Promise((resolve, reject) => {
-    // GlobalRegionScheduler.run takes a Consumer<ScheduledTask>, not a
-    // Runnable. We ignore the task arg — it's only useful for cancellation,
-    // which Promise users don't have a handle on anyway.
-    const consumer = rune.implement('java.util.function.Consumer', {
-      accept: () => {
-        try { resolve(fn()); }
-        catch (err) { reject(err); }
-      },
+    _runeMainQueue.push(() => {
+      try { resolve(fn()); }
+      catch (err) { reject(err); }
     });
+    if (_runeMainQueued) return;
     try {
-      bukkit.Bukkit.getGlobalRegionScheduler().run(_runeGetPlugin(), consumer);
+      _runeMainConsumer ??= rune.implement('java.util.function.Consumer', {
+        accept: () => {
+          const batch = _runeMainQueue.splice(0);
+          _runeMainQueued = false;
+          for (const task of batch) task();
+        },
+      });
+      _runeMainQueued = true;
+      bukkit.Bukkit.getGlobalRegionScheduler().run(_runeGetPlugin(), _runeMainConsumer);
     } catch (e) {
+      _runeMainQueued = false;
+      _runeMainQueue.pop();
       reject(e);
     }
   });
@@ -1176,7 +1196,8 @@ globalThis.rune.serve = function (opts, init) {
   const staticMounts = []; // {prefix, root, spaFallback}
 
   function addRoute(method, path, handler) {
-    routes.push({ method: method.toUpperCase(), segments: _runeParsePath(path), handler });
+    routes.push({ method: method.toUpperCase(), segments: _runeParsePath(path),
+      handler: globalThis.__rune_track?.('http', handler) ?? handler });
   }
 
   const app = {
@@ -1948,6 +1969,14 @@ globalThis.Listener = function Listener(target, _context) {
 // ---------------------------------------------------------------------------
 
 const commandHandlers = new Map();
+const trackedCommandHandlers = new WeakSet();
+
+function trackCommand(handler) {
+  if (trackedCommandHandlers.has(handler)) return handler;
+  const tracked = globalThis.__rune_track?.('commands', handler) ?? handler;
+  trackedCommandHandlers.add(tracked);
+  return tracked;
+}
 
 // JS-side counter for dynamic-suggester ids. Suggesters are stored in
 // `proxyImpls` alongside rune.implement proxies; we use a high range to
@@ -1989,7 +2018,7 @@ function _runeWalkSpec(spec, runOverride, parentPath) {
   const handler = runOverride ?? spec.run;
   const hasExecutor = typeof handler === 'function';
   if (hasExecutor) {
-    commandHandlers.set(path, handler);
+    commandHandlers.set(path, trackCommand(handler));
     const eventName = '__rune_command:' + path;
     if (!handlers.has(eventName)) {
       // Internal command-dispatch events. The host fires them directly
@@ -2257,6 +2286,13 @@ globalThis.Command = function Command(pathOrName, opts) {
       target,
       opts,
     };
+    if (runProp) {
+      meta.run = trackCommand((ctx) => {
+        const instance = new target();
+        for (const arg of argList) instance[arg.propName] = ctx.args[arg.name];
+        return instance[runProp](ctx);
+      });
+    }
     const list = _commandLeaves.get(root) || [];
     list.push(meta);
     _commandLeaves.set(root, list);
@@ -2382,14 +2418,7 @@ function _emitTreeSpec(node, parentArgs, rootOpts) {
   }
 
   // Bind the run handler if this node has a leaf with @Run.
-  if (node.leaf && node.leaf.runProp) {
-    const leaf = node.leaf;
-    spec.run = function (ctx) {
-      const inst = new leaf.target();
-      for (const m of leaf.args) inst[m.propName] = ctx.args[m.name];
-      return inst[leaf.runProp](ctx);
-    };
-  }
+  if (node.leaf?.run) spec.run = node.leaf.run;
   return spec;
 }
 

@@ -25,6 +25,7 @@ class TypesExtractor(private val plugin: JavaPlugin) {
         val scriptsDir: Path = plugin.dataFolder.toPath().resolve("scripts")
         Files.createDirectories(scriptsDir)
         val dts = extractResource("/types/rune.d.ts", scriptsDir.resolve("rune.d.ts"))
+        extractResource("/types/dashboard-react.d.ts", scriptsDir.resolve("dashboard-react.d.ts"))
         extractResource("/types/tsconfig.json", scriptsDir.resolve("tsconfig.json"))
         extractNodeTypes(scriptsDir)
         return dts

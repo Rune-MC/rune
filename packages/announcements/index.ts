@@ -19,6 +19,15 @@ function send(message: string) {
   }
 }
 
+rune.dashboard?.whenInstalled?.(async () => (await import("./dashboard.tsx")).registerDashboard(
+  messages.value, config.read, (name) => {
+    const data = messages.value();
+    if (!Object.hasOwn(data, name)) throw new Error("Announcement not found.");
+    send(data[name]);
+    lastSent = Date.now();
+  },
+));
+
 rune.schedule.everyTicks(() => {
   const opts = config.read();
   const now = Date.now();

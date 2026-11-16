@@ -108,6 +108,14 @@ interface RuneApi {
     readonly dashboard: {
         panel(id: string, title: string, read: () => Record<string, RuneSettingValue>): () => void;
         start(options: { port?: number; token: string }): Server;
+        /** True once the official dashboard has started accepting requests. */
+        isInstalled(): boolean;
+        /** Load an integration now or when the dashboard starts. Return a disposer to unregister it. */
+        whenInstalled(callback: () => void | (() => void) | Promise<void | (() => void)>): () => void;
+        /** Add a live dashboard tool. The returned function removes the contribution. */
+        register(contribution: RuneDashboardContribution): () => void;
+        /** Bind the React console and start collecting process and Paper statistics. */
+        monitor(runtime: typeof import("react/jsx-runtime") & { react: typeof import("react"); components: Record<string, import("react").ComponentType<any>> }): RuneDashboardMonitor;
     };
 
     /**
@@ -552,6 +560,99 @@ interface ServeContext {
 }
 
 }  // end declare global
+
+declare global {
+    type RuneDashboardNode = import("react").ReactNode;
+    type RuneDashboardValue = RuneSettingValue;
+    type RuneDashboardField = {
+        type: "string" | "number" | "boolean";
+        label?: string;
+        description?: string;
+        required?: boolean;
+        default?: string | number | boolean;
+        min?: number;
+        max?: number;
+        maxLength?: number;
+        multiline?: boolean;
+        choices?: Record<string, string>;
+    };
+    interface RuneDashboardPageContext {
+        query(key: string): string | null;
+        href(page?: string): string;
+        action(id: string, defaults?: Record<string, RuneSettingValue>): RuneDashboardNode;
+        onMain<T>(callback: () => T): Promise<Awaited<T>>;
+    }
+    interface RuneDashboardContribution {
+        id: string;
+        title: string;
+        description?: string;
+        metrics?: () => Record<string, RuneSettingValue | null> | Promise<Record<string, RuneSettingValue | null>>;
+        pages?: Record<string, RuneDashboardPage>;
+        /** Omit page to link to the tool itself. Omit navigation for one link to the tool. */
+        navigation?: readonly { page?: string; label?: string }[];
+        overview?: RuneDashboardPage;
+        actions?: Record<string, {
+            title: string;
+            description?: string;
+            confirm?: string;
+            fields?: Record<string, RuneDashboardField>;
+            run: (input: Readonly<Record<string, RuneSettingValue>>, context: Pick<RuneDashboardPageContext, "onMain">) => void | string | Promise<void | string>;
+        }>;
+    }
+    interface RuneDashboardPage {
+        title: string;
+        render: (context: RuneDashboardPageContext) => RuneDashboardNode | Promise<RuneDashboardNode>;
+    }
+    interface RuneDashboardSample {
+        at: number;
+        rss: number;
+        players: number | null;
+        tps: number | null;
+        mspt: number | null;
+        cpu: number | null;
+    }
+    interface RuneDashboardServer {
+        server: { version: string; minecraft: string; rune: string | null; java: string; online: number; capacity: number; tps: number[] | null; mspt: number | null };
+        jvm: { uptimeMs: number; heapUsed: number; heapCommitted: number; heapMax: number | null; nonHeapUsed: number; threads: number; peakThreads: number;
+            gc: { name: string; collections: number | null; timeMs: number | null }[] };
+        plugins: { name: string; version: string; enabled: boolean; description: string | null; authors: string[]; listeners: number; pendingTasks: number | null }[];
+        worlds: { name: string; environment: string; players: number; chunks: number }[];
+        players: { name: string; world: string; mode: string; ping: number }[];
+        scripts: Record<string, string>;
+    }
+    interface RuneDashboardSnapshot {
+        host: RuneDashboardServer | null;
+        process: { pid: number; platform: string; node: string; uptimeMs: number; cores: number; physicalMemory: number;
+            freeMemory: number; eventLoop: number; rss: number; heapUsed: number; heapTotal: number; external: number; arrayBuffers: number };
+    }
+    interface RuneDashboardScript {
+        path: string;
+        status: string;
+        loadMs: number;
+        logCount: number;
+        started: number;
+        lastError: string | null;
+        activity: Record<string, { registered: number; calls: number; errors: number; syncMs: number; maxMs: number }>;
+    }
+    interface RuneDashboardMonitor {
+        snapshot(): RuneDashboardSnapshot | undefined;
+        samples(): RuneDashboardSample[];
+        runes(): Promise<{ id: string; name: string; version?: string; status: string; script?: RuneDashboardScript }[]>;
+        contributions(): Map<string, Omit<RuneDashboardContribution, "pages" | "actions" | "navigation"> & {
+            owner?: string;
+            navigation: readonly { page?: string; label: string }[];
+            pages: Map<string, NonNullable<RuneDashboardContribution["pages"]>[string]>;
+            actions: Map<string, NonNullable<RuneDashboardContribution["actions"]>[string] & { fields: Record<string, RuneDashboardField> }>;
+        }>;
+        configs(): Map<string, { schema: Record<string, RuneSetting<RuneSettingValue>>; owner?: string;
+            read(): Record<string, RuneSettingValue>; update(changes: Record<string, RuneSettingValue>): void }>;
+        panels(): Map<string, { title: string; owner?: string; read(): Record<string, RuneSettingValue> }>;
+        logs(): { id: number; at: number; rune: string | null; level: string; text: string }[];
+        reload(): void;
+        ready(): void;
+        close(): void;
+    }
+}
 
 interface RuneTitleTimes { fadeInMs?: number; stayMs?: number; fadeOutMs?: number }
 type RuneSoundSource = "master" | "music" | "record" | "weather" | "block" |

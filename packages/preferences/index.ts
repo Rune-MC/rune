@@ -2,6 +2,7 @@ import { paperRecords } from "@rune/storage";
 const settings = ["announcements", "actionbars", "sounds"] as const;
 type Setting = (typeof settings)[number];
 const store = paperRecords<boolean>(rune, "preferences", "rune-player-preferences");
+rune.dashboard?.whenInstalled?.(async () => (await import("./dashboard.tsx")).registerDashboard(settings, store.value));
 
 export function get(playerId: string, key: Setting): boolean {
   return store.value()[`${playerId}:${key}`] ?? true;

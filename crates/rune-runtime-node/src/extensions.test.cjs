@@ -4,7 +4,8 @@ const path = require('node:path');
 const test = require('node:test');
 const vm = require('node:vm');
 
-const bootstrap = fs.readFileSync(path.join(__dirname, 'extensions.cjs'), 'utf8');
+const bootstrap = ['telemetry.cjs', 'dashboard-data.cjs', 'dashboard.cjs', 'extensions.cjs']
+  .map((file) => fs.readFileSync(path.join(__dirname, file), 'utf8')).join('\n');
 
 function setup() {
   const routes = new Map();
@@ -16,6 +17,7 @@ function setup() {
       return stores.get(name);
     },
     runOnMain: async (fn) => fn(),
+    callStatic: () => ({ server: { online: 3, tps: [20], mspt: 2 } }),
     serve(options, init) {
       assert.equal(options.host, '127.0.0.1');
       init({
@@ -25,7 +27,7 @@ function setup() {
     },
   };
   const extensions = vm.runInNewContext(bootstrap + '\nruneExtensions;', {
-    rune, require, structuredClone, Buffer, URLSearchParams, process,
+    rune, require, structuredClone, Buffer, URLSearchParams, process, setInterval, clearInterval,
     console: { log() {}, info() {}, warn() {}, error() {}, debug() {} },
     _fmt: (args) => args.join(' '),
     __rune_request_reload: () => reloads++,
@@ -56,6 +58,40 @@ test('services, events, and recovery from a failed load', async () => {
   unsubscribe();
   await rune.events.emit('test.change', { count: 9 });
   assert.equal(observed, 5);
+});
+
+test('dashboard integrations wait for readiness and retain Rune ownership', async () => {
+  const { rune, extensions } = setup();
+  let initialized = 0;
+  await extensions.load('tool/index.ts', () => {
+    rune.dashboard.whenInstalled(() => {
+      initialized++;
+      return rune.dashboard.register({
+        id: 'tool', title: 'Tool', navigation: [{ page: 'settings', label: 'Tool settings' }],
+        pages: { settings: { title: 'Settings', render: () => 'Page' } },
+      });
+    });
+  });
+  await assert.rejects(extensions.load('failed/index.ts', () => {
+    rune.dashboard.whenInstalled(() => { initialized += 100; });
+    throw new Error('test failed load');
+  }));
+  assert.equal(rune.dashboard.isInstalled(), false);
+  assert.equal(initialized, 0);
+  const monitor = rune.dashboard.monitor({ jsx() {}, jsxs() {}, react: {} });
+  try {
+    monitor.ready();
+    await Promise.resolve();
+    assert.equal(initialized, 1);
+    assert.equal(rune.dashboard.isInstalled(), true);
+    const tool = monitor.contributions().get('tool');
+    assert.equal(tool.owner, 'tool/index.ts');
+    assert.equal(tool.navigation[0].label, 'Tool settings');
+    assert.equal(tool.pages.get('settings').render(), 'Page');
+  } finally {
+    monitor.close();
+  }
+  assert.equal(rune.dashboard.isInstalled(), false);
 });
 
 test('dashboard edits share the command schema and require credentials and CSRF', async () => {

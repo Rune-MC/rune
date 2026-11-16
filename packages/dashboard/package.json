@@ -1,0 +1,17 @@
+{
+  "name": "@rune/dashboard",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "esbuild client.tsx --bundle --jsx=automatic --minify --legal-comments=linked --outfile=web/dashboard.js"
+  },
+  "dependencies": {
+    "react": "19.3.1",
+    "react-dom": "19.3.1"
+  },
+  "devDependencies": {
+    "@types/react": "^19.3.0",
+    "@types/react-dom": "^19",
+    "esbuild": "0.28.2"
+  }
+}

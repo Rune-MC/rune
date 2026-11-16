@@ -4,6 +4,7 @@ import { paperRecords, StorageInputError } from "@rune/storage";
 
 const homes = paperRecords<Record<string, Position>>(rune, "homes", "rune-homes");
 const delays = createCooldowns();
+rune.dashboard?.whenInstalled?.(async () => (await import("./dashboard.tsx")).registerDashboard(homes.value));
 const config = rune.config("homes", {
   "max-homes": { default: 5, min: 1, max: 100, label: "Homes per player" },
   "cooldown-seconds": { default: 10, min: 0, max: 300, label: "Teleport cooldown" },

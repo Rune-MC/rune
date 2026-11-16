@@ -35,10 +35,9 @@ Use `RUNE_SPRINT_ARENA_STORAGE` to choose its storage.
 
 ## Use the dashboard
 
-Set `RUNE_DASHBOARD_TOKEN` to a password of at least 24 characters in the
-server environment and install the `dashboard` Rune. Visit
-`http://127.0.0.1:8777` on the server or through an SSH tunnel. Sign in as
-`rune` using that password. The server listens on loopback.
+Install [@rune/dashboard](../packages/dashboard/README.md) and restart Paper.
+Visit `http://127.0.0.1:8777` from the server or through an SSH tunnel and
+create the owner account. Installed Runes can add tools, pages, and actions.
 
 ## Extend the examples
 
