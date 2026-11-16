@@ -6,7 +6,7 @@ export function Enrollment({ csrf, kind, error }: { csrf: string; kind: "join" |
   const title = accepting ? "Accept invitation" : "Reset password";
   return <html lang="en"><head>
     <meta charSet="utf-8" /><meta name="viewport" content="width=device-width,initial-scale=1" />
-    <title>{title} · Rune</title><link rel="stylesheet" href="/assets/dashboard.css" />
+    <title>{title + " · Rune"}</title><link rel="stylesheet" href="/assets/dashboard.css" />
   </head><body><main className="auth-page">
     <h1>Rune Console</h1>
     <Card title={title}>
