@@ -1,19 +1,21 @@
 import { avatarKey, playerName } from "./avatar-url.ts";
+
 const fallback = Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNgYAAAAAMAASsJTYQAAAAASUVORK5CYII=", "base64");
-const cache = new Map<string, { body: Uint8Array; expires: number }>();
-const inFlight = new Map<string, Promise<Uint8Array>>();
+const pngSignature = Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]);
+const cache = new Map<string, { body: Uint8Array | null; refreshAt: number; keepUntil: number }>();
+const inFlight = new Map<string, Promise<Uint8Array | null>>();
 const queued: (() => void)[] = [];
 let fetching = 0;
 
-async function fetchImage(key: string): Promise<Uint8Array> {
+async function fetchImage(url: string): Promise<Uint8Array | null> {
   const limit = 64 * 1024;
   try {
-    const response = await fetch("https://minotar.net/avatar/" + key + "/40", {
-      signal: AbortSignal.timeout(2500), redirect: "error", headers: { Accept: "image/png" },
+    const response = await fetch(url, {
+      signal: AbortSignal.timeout(2000), redirect: "error", headers: { Accept: "image/png" },
     });
-    if (!response.ok || response.headers.get("Content-Type")?.split(";")[0] !== "image/png" || !response.body) {
+    if (!response.ok || response.headers.get("Content-Type")?.split(";")[0].trim().toLowerCase() !== "image/png" || !response.body) {
       await response.body?.cancel();
-      return fallback;
+      return null;
     }
     const reader = response.body.getReader();
     const pieces: Uint8Array[] = [];
@@ -23,55 +25,77 @@ async function fetchImage(key: string): Promise<Uint8Array> {
         const chunk = await reader.read();
         if (chunk.done) break;
         size += chunk.value.length;
-        if (size > limit) { await reader.cancel(); return fallback; }
+        if (size > limit) { await reader.cancel(); return null; }
         pieces.push(chunk.value);
       }
     } finally {
       reader.releaseLock();
     }
+
     const image = Buffer.concat(pieces);
-    return image.subarray(0, 8).equals(Buffer.from([137, 80, 78, 71, 13, 10, 26, 10])) ? image : fallback;
+    // Both avatar endpoints produce a 40px head. Reject placeholder pixels and truncated responses.
+    if (image.length < 45 || !image.subarray(0, 8).equals(pngSignature) || image.toString("ascii", 12, 16) !== "IHDR" ||
+        image.readUInt32BE(16) !== 40 || image.readUInt32BE(20) !== 40 ||
+        image.toString("ascii", image.length - 8, image.length - 4) !== "IEND") return null;
+    return image;
   } catch {
-    return fallback;
+    return null;
   }
 }
 
-async function fetchQueued(key: string) {
+async function fetchQueued(key: string, username: string | undefined, keepExisting: boolean) {
   if (fetching < 8) fetching++;
   else await new Promise<void>((ready) => queued.push(ready));
-  try { return await fetchImage(key); }
-  finally {
+  try {
+    const first = await fetchImage("https://mc-heads.net/avatar/" + key + "/40");
+    if (first || keepExisting) return first;
+    const alternate = await fetchImage("https://minotar.net/avatar/" + key + "/40");
+    if (alternate || !username) return alternate;
+    return await fetchImage("https://mc-heads.net/avatar/" + username + "/40");
+  } finally {
     const next = queued.shift();
     if (next) next();
     else fetching--;
   }
 }
 
-async function lookup(key: string): Promise<Uint8Array> {
-  const saved = cache.get(key);
-  if (saved && saved.expires > Date.now()) {
-    cache.delete(key);
-    cache.set(key, saved);
-    return saved.body;
-  }
-  const pending = inFlight.get(key);
+function refresh(cacheKey: string, key: string, username?: string) {
+  const pending = inFlight.get(cacheKey);
   if (pending) return pending;
-  if (inFlight.size >= 40) return fallback;
-  const job = fetchQueued(key).then((body) => {
-    cache.delete(key);
-    cache.set(key, { body, expires: Date.now() + (body === fallback ? 5 : 60) * 60_000 });
+  if (inFlight.size >= 32) return undefined;
+  const initial = cache.get(cacheKey);
+  const keepExisting = Boolean(initial?.body && initial.keepUntil > Date.now());
+  const job = fetchQueued(key, username, keepExisting).then((image) => {
+    const now = Date.now();
+    const saved = image
+      ? { body: image, refreshAt: now + 60 * 60_000, keepUntil: now + 24 * 60 * 60_000 }
+      : { body: initial && initial.keepUntil > now ? initial.body : null,
+          refreshAt: now + 15_000, keepUntil: initial?.keepUntil ?? now };
+    cache.delete(cacheKey);
+    cache.set(cacheKey, saved);
     while (cache.size > 256) cache.delete(cache.keys().next().value!);
-    return body;
-  }).finally(() => inFlight.delete(key));
-  inFlight.set(key, job);
+    return saved.body;
+  }).finally(() => inFlight.delete(cacheKey));
+  inFlight.set(cacheKey, job);
   return job;
 }
 
 export async function avatar(value: string, name?: string) {
-  const key = avatarKey(value);
-  let body = key ? await lookup(key) : fallback;
-  if (body === fallback && name && playerName.test(name) && name.toLowerCase() !== key) {
-    body = await lookup(name.toLowerCase());
+  const username = name && playerName.test(name) ? name.toLowerCase() : undefined;
+  const key = avatarKey(value) ?? username;
+  if (!key) return { body: fallback, maxAge: 0 };
+
+  const backup = username !== key ? username : undefined;
+  const cacheKey = key + "/" + (backup ?? "");
+  const saved = cache.get(cacheKey);
+  const now = Date.now();
+  const recent = saved?.body && saved.keepUntil > now ? saved.body : null;
+  if (saved && now < saved.refreshAt) {
+    cache.delete(cacheKey);
+    cache.set(cacheKey, saved);
+    return { body: recent ?? fallback, maxAge: recent ? 300 : 0 };
   }
-  return { body, maxAge: body === fallback ? 0 : 300 };
+  const job = refresh(cacheKey, key, backup);
+  const body = recent ?? await job;
+  return { body: body ?? fallback, maxAge: body ? 300 : 0 };
 }

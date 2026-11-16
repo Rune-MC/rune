@@ -68,9 +68,10 @@ users and roles are stored alongside the owner in the configured auth store.
   live presence, recent Rune output, registered config, web changes, and
   authentication controls.
 
-Player lists show Minecraft heads fetched by the dashboard from Minotar.
-The request contains the player's UUID or Minecraft username. The
-dashboard caches the image and shows a generic icon when it can't load.
+Player lists show Minecraft heads fetched by the dashboard from MC Heads,
+with Minotar as a fallback. Requests contain the player's UUID or
+Minecraft username. The dashboard caches successful images, keeps them
+during short outages, and shows a generic icon when no head is available.
 
 ## Manage official Runes
 
